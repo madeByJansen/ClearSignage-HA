@@ -31,7 +31,7 @@ description: >-
   venue's source of truth for live data — till prices, and how busy your spaces are. Each
   screen is a complete, independent signage player with its own content library, managed on
   itself.
-url: https://github.com/WorkPlain-com/ClearSignage-HA
+url: https://github.com/madeByJansen/ClearSignage-HA
 # A prebuilt image, not a local build. The Supervisor can build an app on the user's own
 # machine, and for a public add-on that is friendlier — but this image is built from a
 # *private* repository, so a local build would need ClearSignage credentials to exist on
@@ -44,7 +44,7 @@ url: https://github.com/WorkPlain-com/ClearSignage-HA
 # The registry is private. Home Assistant stores per-registry credentials of its own
 # (Supervisor's `docker/registries` API), so ghcr.io read access is configured once per
 # install and never appears in this file.
-image: ghcr.io/workplain-com/clearsignage-ha
+image: ghcr.io/madeByJansen/clearsignage-ha
 # HA Yellow is a CM4 (aarch64); amd64 covers a NUC or a VM. 32-bit Arm is deliberately
 # absent — HA OS dropped it, and the device dependency pins are resolved against
 # manylinux aarch64/x86_64 wheels (see ClearSignage's `make device-lock`).
