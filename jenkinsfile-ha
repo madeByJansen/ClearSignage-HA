@@ -63,7 +63,9 @@ pipeline {
 
     environment {
         REGISTRY = 'ghcr.io'
-        IMAGE    = 'ghcr.io/madeByJansen/clearsignage-ha'
+        // Docker image repository components must be lowercase, even though the
+        // GitHub organisation's display name contains capitals.
+        IMAGE    = 'ghcr.io/madebyjansen/clearsignage-ha'
 
         // Jenkins username/password credential for GHCR.
         //
@@ -140,7 +142,7 @@ pipeline {
                 // configuration.
                 withCredentials([
                     usernamePassword(
-                        credentialsId: 'GithubPAT-Workplain-com',
+                        credentialsId: 'GithubPAT-madeByJansen',
                         usernameVariable: 'GITHUB_USERNAME',
                         passwordVariable: 'GITHUB_TOKEN'
                     )
@@ -257,7 +259,7 @@ EOF
                             set -euo pipefail
 
                             GHCR_TOKEN="${GHCR_PSW}" ./scripts/next-image-version.py \
-                                --owner workplain-com \
+                                --owner madeByJansen \
                                 --package clearsignage-ha \
                                 --config clearsignage/config.yaml
                         ''',
@@ -370,7 +372,7 @@ with open('clearsignage/build.yaml', encoding='utf-8') as file:
             steps {
                 withCredentials([
                     usernamePassword(
-                        credentialsId: 'GithubPAT-Workplain-com',
+                        credentialsId: 'GithubPAT-madeByJansen',
                         usernameVariable: 'GIT_USERNAME',
                         passwordVariable: 'GIT_PASSWORD'
                     )

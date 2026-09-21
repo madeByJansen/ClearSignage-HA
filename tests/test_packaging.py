@@ -799,6 +799,9 @@ def test_the_image_is_a_prebuilt_multi_arch_manifest():
     fighting the platform.
     """
     assert CONFIG["image"].startswith("ghcr.io/")
+    assert CONFIG["image"] == CONFIG["image"].lower(), (
+        "OCI image repository names must be lowercase"
+    )
     assert "{arch}" not in CONFIG["image"]
 
 
@@ -811,6 +814,24 @@ def test_the_pipeline_builds_both_architectures_into_one_manifest():
     assert "imagetools create" in pipeline
     # The image the pipeline pushes must be the one the manifest tells HA to pull.
     assert CONFIG["image"] in pipeline
+
+
+def test_all_publishers_use_the_migrated_github_organisation():
+    """Keep an organisation migration atomic across both CI lanes and helper defaults."""
+    paths = (
+        REPO / "jenkinsfile-ha",
+        REPO / ".github" / "workflows" / "homeassistant.yml",
+        REPO / "scripts" / "fetch-source.sh",
+        REPO / "scripts" / "next-image-version.py",
+        REPO / "scripts" / "record-published-version.sh",
+        REPO / "repository.yaml",
+        APP / "Dockerfile",
+        APP / "config.yaml",
+    )
+    for path in paths:
+        assert "workplain-com" not in path.read_text(encoding="utf-8").lower(), (
+            f"{path.relative_to(REPO)} still points at the previous GitHub organisation"
+        )
 
 
 def test_the_pipeline_keeps_only_the_current_and_previous_image_releases():

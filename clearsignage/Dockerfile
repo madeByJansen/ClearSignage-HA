@@ -71,5 +71,5 @@ LABEL \
     io.hass.name="ClearSignage" \
     io.hass.description="Run one or more ClearSignage screens inside Home Assistant" \
     io.hass.type="addon" \
-    org.opencontainers.image.source="https://github.com/WorkPlain-com/clearsignage" \
+    org.opencontainers.image.source="https://github.com/madeByJansen/clearsignage" \
     org.opencontainers.image.revision="${CLEARSIGNAGE_REF}"

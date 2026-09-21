@@ -24,7 +24,7 @@ set -euo pipefail
 # release gate. Overridden per build by the pipeline's branch choice, or by an
 # exact tag/commit when reproducing a published image.
 REF="${CLEARSIGNAGE_REF:-prod}"
-REPO="${CLEARSIGNAGE_REPO:-https://github.com/WorkPlain-com/clearsignage.git}"
+REPO="${CLEARSIGNAGE_REPO:-https://github.com/madeByJansen/clearsignage.git}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 DEST="${HERE}/clearsignage/src"
 WORK="$(mktemp -d)"

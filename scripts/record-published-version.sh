@@ -71,7 +71,7 @@ fi
 give_up() {
     echo "$1" >&2
     echo "THE IMAGE IS PUBLISHED but its version was not recorded." >&2
-    echo "ghcr.io/workplain-com/clearsignage-ha:${VERSION} exists; ${BRANCH} still names an" >&2
+    echo "ghcr.io/madebyjansen/clearsignage-ha:${VERSION} exists; ${BRANCH} still names an" >&2
     echo "older version, so Home Assistant will not offer it. Set" >&2
     echo "version: \"${VERSION}\" in ${MANIFEST} on ${BRANCH} to fix this — no rebuild is" >&2
     echo "needed, and rebuilding would only choose a different version. A branch protection" >&2

@@ -121,7 +121,7 @@ def main(argv: list[str]) -> int:
             "workspace's. Requires --set."
         ),
     )
-    parser.add_argument("--owner", default="workplain-com")
+    parser.add_argument("--owner", default="madeByJansen")
     parser.add_argument("--package", default="clearsignage-ha")
     parser.add_argument(
         "--set",
