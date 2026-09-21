@@ -428,7 +428,7 @@ EOF
                     # the package write permission used above.
                     GHCR_TOKEN="${GHCR_PSW}" \
                         ./scripts/prune-ghcr-releases.py \
-                        workplain-com \
+                        madeByJansen \
                         clearsignage-ha \
                         "${APP_VERSION}"
                 '''
