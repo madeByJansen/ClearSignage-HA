@@ -63,7 +63,7 @@ pipeline {
 
     environment {
         REGISTRY = 'ghcr.io'
-        IMAGE    = 'ghcr.io/workplain-com/clearsignage-ha'
+        IMAGE    = 'ghcr.io/madeByJansen/clearsignage-ha'
 
         // Jenkins username/password credential for GHCR.
         //
