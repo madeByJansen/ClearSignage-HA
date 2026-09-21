@@ -142,7 +142,7 @@ pipeline {
                 // configuration.
                 withCredentials([
                     usernamePassword(
-                        credentialsId: 'GithubPAT-madeByJansen',
+                        credentialsId: 'GithubPAT-WorkPlain-com',
                         usernameVariable: 'GITHUB_USERNAME',
                         passwordVariable: 'GITHUB_TOKEN'
                     )
@@ -372,7 +372,7 @@ with open('clearsignage/build.yaml', encoding='utf-8') as file:
             steps {
                 withCredentials([
                     usernamePassword(
-                        credentialsId: 'GithubPAT-madeByJansen',
+                        credentialsId: 'GithubPAT-WorkPlain-com',
                         usernameVariable: 'GIT_USERNAME',
                         passwordVariable: 'GIT_PASSWORD'
                     )
