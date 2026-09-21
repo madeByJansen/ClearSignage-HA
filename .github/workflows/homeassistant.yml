@@ -34,7 +34,8 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE: ghcr.io/workplain-com/clearsignage-ha
+  # OCI repository names are lowercase, irrespective of the GitHub display name.
+  IMAGE: ghcr.io/madebyjansen/clearsignage-ha
 
 jobs:
   build:
@@ -115,7 +116,7 @@ jobs:
         run: |
           set -euo pipefail
           version="$(./scripts/next-image-version.py \
-            --owner workplain-com \
+            --owner madeByJansen \
             --package clearsignage-ha \
             --config clearsignage/config.yaml)"
           printf 'version=%s\n' "${version}" >> "${GITHUB_OUTPUT}"
@@ -215,7 +216,7 @@ jobs:
           APP_VERSION: ${{ steps.version.outputs.version }}
         run: |
           ./scripts/prune-ghcr-releases.py \
-            workplain-com \
+            madeByJansen \
             clearsignage-ha \
             "${APP_VERSION}"
 
