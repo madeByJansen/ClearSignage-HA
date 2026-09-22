@@ -19,7 +19,7 @@ name: ClearVenue
 # Editing it by hand only makes sense to repair a release the pipeline published but could
 # not record; setting it to a version that was never published leaves every install failing
 # at the pull.
-version: "20260922.03"
+version: "20260922.04"
 # **Never change this.** The Supervisor keys an add-on's persistent `/data` by its slug, so a
 # rename here makes this a *different* add-on: a fresh empty `/data`, and `instances.json`,
 # every screen's content library and the venue database orphaned on the host while an
