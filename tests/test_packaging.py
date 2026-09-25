@@ -889,3 +889,19 @@ def test_the_image_contains_the_package_the_run_script_execs():
         f"{package} is copied but never verified, so an upstream rename would publish "
         f"an image that cannot start"
     )
+
+
+def test_the_image_carries_the_service_the_venue_deploys_to_its_hosting():
+    """A venue builds Event Share's release from its own source when *Deploy* is pressed.
+
+    Nothing in this image runs PHP, so nothing here would notice the source missing: the
+    image built, started and served every page, and the first *Deploy* on somebody's Home
+    Assistant ended in a 500 reading ``event_share/app/VERSION``. Copied, and checked on
+    arrival by the two files the venue reads first.
+    """
+    fetch = (REPO / "scripts" / "fetch-source.sh").read_text(encoding="utf-8")
+    copied = re.search(r"^for path in ([^;]+); do$", fetch, re.M)
+    assert copied, "fetch-source.sh no longer states which paths it copies"
+    assert "event_share" in copied.group(1).split(), "the venue could not build its release"
+    for required in ("event_share/app/VERSION", "event_share/install/install.php"):
+        assert f'"${{DEST}}/{required}"' in fetch, f"{required} is copied but never verified"
