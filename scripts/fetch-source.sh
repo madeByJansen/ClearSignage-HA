@@ -7,12 +7,17 @@
 # its built artefact does. Keeping that line here means this repo can never quietly fork
 # the runtime it is supposed to package.
 #
-# Only four paths are copied, and the omissions are the point: `hosted/` is the
+# Only five paths are copied, and the omissions are the point: `hosted/` is the
 # supervisor, `device/` is one screen, `shared/` is the single-sourced operator UI, and
 # `clearvenue/` is the venue role this add-on runs (DP92) — the till, enrolment, and the
 # replication lane that feeds a screen its prices. The appliance's image builder, its
 # systemd units, its Android port and the cloud Worker are all absent, because a hosted
 # instance is none of those things.
+#
+# `event_share/` runs nowhere in this image. It is the small PHP service a venue deploys to
+# its own web hosting (DP157), and the venue builds that release from this source on the
+# press of *Deploy* — so without it every deploy failed on its first read of
+# event_share/app/VERSION, as a 500.
 #
 # `clearvenue/` is the newest of the four and the reason the add-on execs `-m clearvenue`
 # rather than `-m hosted`: a venue is a supervisor plus its own surfaces, and which
@@ -42,7 +47,7 @@ git clone --quiet --depth 1 --branch "${REF}" "${REPO}" "${WORK}/clearsignage" 2
 
 rm -rf "${DEST}"
 mkdir -p "${DEST}"
-for path in hosted device shared clearvenue; do
+for path in hosted device shared clearvenue event_share; do
     cp -a "${WORK}/clearsignage/${path}" "${DEST}/${path}"
 done
 
@@ -64,7 +69,9 @@ for required in \
     "${DEST}/shared/pyproject.toml" \
     "${DEST}/hosted/__main__.py" \
     "${DEST}/clearvenue/__main__.py" \
-    "${DEST}/clearvenue/hosts/__init__.py"
+    "${DEST}/clearvenue/hosts/__init__.py" \
+    "${DEST}/event_share/app/VERSION" \
+    "${DEST}/event_share/install/install.php"
 do
     [ -f "${required}" ] || { echo "missing from source: ${required}" >&2; exit 1; }
 done
