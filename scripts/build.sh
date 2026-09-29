@@ -7,18 +7,18 @@
 set -euo pipefail
 
 ARCH="${1:-aarch64}"
-REF="${CLEARSIGNAGE_REF:-main}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
+source "${HERE}/scripts/channel-env.sh"
 
 BUILD_FROM="$(
     python3 -c "import sys,yaml;print(yaml.safe_load(open(sys.argv[1]))['build_from'][sys.argv[2]])" \
-        "${HERE}/clearsignage/build.yaml" "${ARCH}"
+        "${HERE}/${ADDON_DIR}/build.yaml" "${ARCH}"
 )"
 
-CLEARSIGNAGE_REF="${REF}" "${HERE}/scripts/fetch-source.sh"
+"${HERE}/scripts/fetch-source.sh"
 
 docker build \
     --build-arg "BUILD_FROM=${BUILD_FROM}" \
-    --build-arg "CLEARSIGNAGE_REF=$(cat "${HERE}/clearsignage/src/CLEARSIGNAGE_REF")" \
-    --tag "clearsignage-ha:${ARCH}" \
-    "${HERE}/clearsignage"
+    --build-arg "CLEARSIGNAGE_REF=$(cat "${HERE}/${ADDON_DIR}/src/CLEARSIGNAGE_REF")" \
+    --tag "${PACKAGE}:local-${ARCH}" \
+    "${HERE}/${ADDON_DIR}"

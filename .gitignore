@@ -1,6 +1,9 @@
 # The ClearSignage source is fetched into the build context, never committed here
 # (scripts/fetch-source.sh). Committing it would fork the runtime this repo packages.
-clearsignage/src/
+clearvenue/src/
+clearvenue_beta/src/
+clearvenue_dev/src/
+.venv/
 __pycache__/
 .pytest_cache/
 *.pyc

@@ -1,156 +1,151 @@
-# ClearVenue — Home Assistant app
+# ClearVenue — Home Assistant apps
 
-Private Home Assistant app repository for ClearVenue (Epic 119 Pass 4; renamed in Epic 149).
+Home Assistant packaging for ClearVenue. Product code remains in the private
+`madeByJansen/ClearSignage` repository. This repository has **one permanent branch,
+`main`**, with three independent apps. Feature branches are used for review only.
 
-**The add-on's slug is still `clearsignage` and must stay that way.** The Supervisor keys an
-add-on's persistent `/data` by its slug, so renaming it would make this a different add-on:
-a fresh empty `/data`, with every screen's library and the venue database orphaned on the
-host. Only the display name moved.
+| Channel | App | Slug / folder | Upstream branch | GHCR image |
+| --- | --- | --- | --- | --- |
+| stable | ClearVenue | `clearvenue` | `prod` | `ghcr.io/madebyjansen/clearvenue` |
+| beta | ClearVenue Beta | `clearvenue_beta` | `beta` | `ghcr.io/madebyjansen/clearvenue-beta` |
+| dev | ClearVenue Dev | `clearvenue_dev` | `main` | `ghcr.io/madebyjansen/clearvenue-dev` |
 
-**Packaging only.** No product logic lives here. The supervisor that runs the screens is
-ClearSignage's own `hosted/` package, and it has its own test suite; this repo is the
-manifest, the image, and the start-up seam between them. That split is deliberate — the
-epic's Pass 4 says this repo "never grows a `config.yaml` it cannot test", and the
-converse holds too: ClearSignage never grows a Dockerfile it cannot run.
+There are no existing installations to migrate. The old `clearsignage` app is removed.
+Each slug has independent `/data` and upgrades only from its own image. Changing channels
+means installing a different app; it does not transfer data. Because the apps use host
+networking and the same runtime ports, **run only one channel on a Home Assistant host
+at a time**. Use separate HA hosts for simultaneous testing.
 
-## Layout
+## Building and publishing
 
-```
-repository.yaml              Home Assistant sees this as an app repository
-clearsignage/
-  config.yaml                the app manifest
-  build.yaml                 base image per architecture
-  Dockerfile                 the image
-  DOCS.md                    what an operator reads in the app's Documentation tab
-  translations/en.yaml       option labels and help text
-  rootfs/etc/services.d/…    s6 service: run + finish
-scripts/
-  fetch-source.sh            pin and fetch ClearSignage into the build context
-  build.sh                   fetch + docker build, for one architecture
-  next-image-version.py      choose YYYYMMDD.NN and stamp it into the manifest
-  check-publish-allowed.py   what may be published, and from where
-  record-published-version.sh
-                             put the published version on the branch
-  prune-ghcr-releases.py     keep the current and previous releases, delete the rest
-  ghcr_api.py                the one way these two reach the GHCR package
-tests/test_packaging.py      what this repo can be wrong about
-tests/test_record_version.py the recorder, against real git repositories
-clearsignage/release.yaml    the one commit publishable from somewhere other than prod
-```
+Configure one Jenkins job to read `jenkinsfile-ha` from packaging **main**. It exposes:
 
-## Building
+- `CHANNEL`: `stable` (default), `beta`, or `dev`. The upstream branch, app folder and
+  image are selected together by `scripts/channels.py`.
+- `CLEARSIGNAGE_REF_OVERRIDE`: optional full 40-character upstream commit SHA for a
+  reproducible source checkout or debug build. It never changes the destination channel.
+- `PUSH`: true publishes; false builds both architectures and discards the output.
 
-`jenkinsfile-ha` is the pipeline. It builds both architectures with buildx and qemu, joins
-them into one multi-arch manifest with `imagetools create`, and pushes it to the
-`image:` named in `config.yaml`. Parameters:
+Normal channel builds require no version or pin edits. The pipeline chooses `YYYYMMDD.NN`
+from that channel's GHCR tags, builds ARM64 and AMD64 images, then publishes the versioned
+multi-architecture index and `latest` **within that channel's package**. First publication
+handles a missing package only after successfully listing the owner's packages; access
+failures abort rather than guessing a version.
 
-- `CLEARSIGNAGE_REF` — which upstream branch to build from: **`prod`** (default), `beta`,
-  or `main`. A published image reaches customers' Home Assistant installs, so it defaults
-  to the branch that has been through the release gate rather than to development.
-- `CLEARSIGNAGE_REF_OVERRIDE` — an exact tag or commit SHA, used instead of the branch
-  when set. This is how a previously published image is reproduced: the pipeline records
-  the resolved commit as the image revision, so rebuilding one means naming that commit.
-- `PUSH` — off builds both architectures and throws them away, the honest way to test a
-  Dockerfile change without publishing it.
+After publishing, the recorder updates only the selected channel's `config.yaml` on the
+latest packaging `main`, retries a concurrent branch update, and adds a channel-qualified
+Git tag: `stable/vYYYYMMDD.NN`, `beta/vYYYYMMDD.NN`, or `dev/vYYYYMMDD.NN`. The version
+counter is independent per package, so different channels can legitimately share a number.
+Pruning keeps the current and previous release in that package and preserves untagged
+manifests that might still be referenced. Feature-branch publishing is refused; validate
+this branch with `PUSH=false` until its changes have been reviewed and merged separately.
 
-## Releasing
+To **publish an exact-commit override**, set `clearsignage_revision` in the selected
+channel's `release.yaml` to that same full SHA first. Empty pins are normal. Debug builds
+with `PUSH=false` do not require approval pins. A source SHA makes source selection
+reproducible; base-image tags and installer versions are not a byte-for-byte image lock.
 
-**Run the Jenkins job with `PUSH=true`.** That is the whole of it — nothing in this
-repository is edited by hand to cut a release.
+The existing Jenkins credential IDs are retained:
 
-Two things make that true. The version is chosen by the pipeline, and the branch is
-already released code:
+- `GithubPAT-Workplain-com`: read the private upstream source and write packaging commits
+  and tags on main. Main's protection rules must permit the publishing identity.
+- `ghcr-clearsignage`: read/write packages, and `delete:packages` for pruning.
 
-- **The version** is `YYYYMMDD.NN` from the build's UTC date — the same scheme
-  ClearSignage releases use, chosen the same way: the counter comes from the tags already
-  in the GHCR package, not from a number in this repo, so it cannot collide with a version
-  somebody is already running. `scripts/next-image-version.py` chooses it, stamps it into
-  `clearsignage/config.yaml`, and `scripts/record-published-version.sh` commits that line
-  back to `main` after the push — onto whatever the branch is by then, built with git
-  plumbing so the workspace the rest of the build is using is never disturbed. Home
-  Assistant reads the version from the manifest **in this repository**, so recording it is
-  part of publishing: until it is committed, the Supervisor goes on offering the version
-  the file still names.
-- **The branch** defaults to `prod`, which is ClearSignage's released branch — a commit
-  only reaches it through that repository's own release gate — so building prod ships code
-  that has already been signed off, whatever prod is on the day.
+No token is embedded in a repository URL. The new packages need the same private read
+access as the old package. Configure `ghcr.io` credentials in Home Assistant before
+installation. The OCI source label intentionally still points at the upstream
+ClearSignage repository.
 
-Then, before anyone upgrades:
+The manual GitHub Actions workflow supports the same channel mapping and gates. It is an
+**alternative publisher**, not an additional concurrent publisher: use either Jenkins or
+Actions. Their concurrency locks cannot coordinate with each other. Actions needs
+`CLEARSIGNAGE_PAT` for private source access, package access for its token, and permission
+to record on main and delete old package versions.
 
-1. Inspect `${IMAGE}:${APP_VERSION}` with `docker buildx imagetools inspect`, checking
-   both platforms and the `org.opencontainers.image.revision` label — that label is the
-   exact upstream commit the image was built from.
-2. Only after that inspection, upgrade the Home Assistant installation to the new app
-   version.
+If recording fails after a successful image push, the job fails with the exact manifest
+and image needing repair. Re-run the recorder with `CHANNEL` and `RECORD_VERSION`, or
+update only that channel's version to the already-published tag. Do not rebuild merely to
+repair the record.
 
-If the build publishes the image but cannot push the version commit — most likely a branch
-protection rule on `main` that the Jenkins credential cannot satisfy — it fails loudly and
-says so. No rebuild is needed in that case: set `version` in `clearsignage/config.yaml` to
-the version it published and commit that.
-
-**Publishing something other than `prod`** — a `beta` or `main` build, or an exact commit
-passed as `CLEARSIGNAGE_REF_OVERRIDE` — is the case where nothing has vouched for the
-code, and it is refused unless that commit is written into `clearsignage/release.yaml`
-first (**both** fields; they name one release). The rule is
-`scripts/check-publish-allowed.py`, and `tests/test_packaging.py` drives it. A `PUSH=false`
-build of any branch is never gated: it publishes nothing.
-
-Locally, one architecture at a time:
+Local single-architecture build (requires Python with PyYAML, Docker and upstream access):
 
 ```bash
-CLEARSIGNAGE_REF=<branch-tag-or-sha> ./scripts/build.sh aarch64
+CHANNEL=dev ./scripts/build.sh aarch64
+CHANNEL=beta CLEARSIGNAGE_REF_OVERRIDE=<full-sha> ./scripts/build.sh amd64
 ```
 
-**Prebuilt, not built on the user's machine.** The Supervisor can build an app locally and
-for a public add-on that is the friendlier default. It is the wrong choice here for one
-concrete reason: this image is built from a *private* repository, so a local build would
-put ClearSignage credentials on every customer's Home Assistant. Publishing keeps the
-source private, turns a ten-minute compile on a CM4 into a pull, and means every install
-runs the bytes that were tested rather than whatever resolves on the day. The cost is that
-each install needs read credentials for the registry — Home Assistant stores those itself,
-per registry hostname, so they never appear in this repository.
+`fetch-source.sh` copies `hosted/`, `device/`, `shared/`, `clearvenue/`, and `event_share/`
+into the selected app's ignored `src/`, strips tests, verifies required runtime files and
+records the resolved SHA. Both pipelines remove private source from the workspace after
+the build. Local builders should remove their selected `src/` when finished.
 
-`fetch-source.sh` copies only `hosted/`, `device/`, `shared/` and `clearvenue/` — the
-venue role this app starts (DP92) — and drops every `tests/` directory. The appliance's
-image builder, its systemd units, the Android port and the cloud Worker are all absent,
-because a hosted instance is none of those things. The
-resolved commit is written to `clearsignage/src/CLEARSIGNAGE_REF` and baked into the
-image as an OCI label, so a running app can say exactly what it is. The pipeline deletes
-that tree afterwards rather than leaving private source on a shared agent.
+## Maintaining packaging
 
-## Testing
+`clearvenue/` is the canonical shared Dockerfile, docs, build bases, translations and s6
+service. After editing those files, run:
 
 ```bash
-python -m pytest tests
+python scripts/sync-channel-packaging.py
+python scripts/sync-channel-packaging.py --check
+python -m pip install pytest pyyaml
+python -m pytest tests -q
 ```
 
-These check the contract between the two repos — the failures that would otherwise
-appear at install time on somebody's Home Assistant. **The image build is not tested
-here.** It needs Docker and a base image per architecture, and a test that skipped
-whenever those were missing would repeat the mistake that let eight of ClearSignage's
-designer tests sit red on `main` for a year.
+The helper updates shared files in beta/dev while preserving each channel's `config.yaml`
+and `release.yaml`. Manifest settings other than channel identity and version must stay
+consistent; tests enforce this and test all three apps. Upstream runtime environment
+variables and `/opt/clearsignage` paths retain their names because they are source API
+contracts, not HA slugs.
+
+Tests exercise packaging, branch selection against local Git repositories, isolated
+version recording and retry behavior, publish gates, registry bootstrap, pruning and
+legacy cleanup selection. They do not replace a Docker build or an HA OS installation
+check. After the first published build of each channel, check both platforms and install
+it on a test HA host before relying on it for venue service.
+
+## Repository rename and rollout
+
+The intended repository URL is `https://github.com/madeByJansen/ClearVenue-HA`.
+Rename the GitHub repository in **Settings → General → Repository name** before using the
+new URL. The available connector has no rename operation. After renaming, update the
+Jenkins SCM URL and local Git remote. The source repository remains `ClearSignage`.
+
+Once this feature branch has been reviewed and merged by the owner, publish each channel
+once from packaging main before offering it for installation. Until then, the newly
+named images and their manifest versions are not a published release.
+
+## Retiring old-slug releases
+
+Remove old artifacts only after main advertises the new apps and all three advertised
+versions have both architectures published. The cleanup helper checks those conditions
+against GitHub and GHCR before it can delete anything:
+
+```bash
+# GHCR_TOKEN must have contents write and read/delete:packages permissions.
+python scripts/cleanup-legacy-releases.py
+# Review the dry-run list, then execute the identical selection:
+python scripts/cleanup-legacy-releases.py --apply
+```
+
+If the repository has not yet been renamed, pass
+`--repository madeByJansen/ClearSignage-HA`. This is an intentional legacy URL reference.
+The helper deletes only the old `clearsignage-ha` GHCR package (including untagged layers),
+unqualified version tags such as `v20260928.01`, and any GitHub Releases attached to those
+old tags. It never deletes new channel images or channel-qualified tags, and is safe to
+rerun after partial completion. GitHub may refuse deletion based on permissions or package
+download limits; a failure is reported instead of being ignored. There were no GitHub
+Releases at the implementation review; GHCR packages and Git tags are separate artifacts.
+
+Regular channel retention can be previewed independently:
+
+```bash
+python scripts/prune-ghcr-releases.py --channel beta --current YYYYMMDD.NN
+# Add --apply to delete the listed old beta versions.
+```
 
 ## Installing
 
-Add `ghcr.io` credentials to Home Assistant's Docker registries first — the image is
-private and the install otherwise fails at the pull. Then Settings → Apps → Install app →
-⋮ → **Repositories**, and add this repository's URL. See `clearsignage/DOCS.md` for what
-an operator needs to know.
-
-### Internal testing (current phase)
-
-There is no public install yet — the `clearsignage-ha` package on ghcr.io is a private
-package, and it stays that way for this phase. "Just add the repo by URL" is not enough
-on its own: the Supervisor always pulls the `image:` in `config.yaml` on install, so a
-tester's Home Assistant still needs its own read credentials for the private package
-(the "Installing" step above), same as a real customer install would. `PUSH=false` on the
-Jenkins job is there for the case where you want to validate a Dockerfile or `build.yaml`
-change without touching the registry at all — it builds both architectures and discards
-them instead of publishing.
-
-## Not yet verified
-
-Nothing here has run on real Home Assistant OS. `host_dbus` reaching the host's avahi,
-binding port 80, the Supervisor's `X-Ingress-Path` and `X-Remote-User-Id` headers, and
-whether the base image's s6 version wants `services.d` or `s6-rc.d` are all assumptions
-this packaging is shaped around and has not met. That is Epic 119 Pass 6.
+Add `ghcr.io` credentials to Home Assistant's Docker registries first, then add the
+repository URL under Settings → Apps → Install app → ⋮ → **Repositories**. Choose
+ClearVenue, ClearVenue Beta or ClearVenue Dev. See the app's Documentation tab for runtime
+configuration, backups, and limitations.

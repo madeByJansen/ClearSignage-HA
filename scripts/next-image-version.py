@@ -13,7 +13,7 @@ themselves. For the same reason a listing that fails for any reason other than "
 for today" aborts rather than falling back to `.01`, which would republish over a version
 somebody is already running.
 
-The version is then stamped into `clearsignage/config.yaml`, because that manifest is
+The version is then stamped into the selected channel's `config.yaml`, because that manifest is
 where Home Assistant reads it: the Supervisor tracks an installed app by that literal and
 pulls `image:<version>`. So the pipeline stamps it before building and commits it after
 publishing — the file records what was published, rather than being edited in the hope
@@ -33,6 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from channels import CHANNELS, channel_settings
 import ghcr_api  # noqa: E402  (the module sits beside this command, not on the path)
 import yaml  # noqa: E402
 
@@ -104,7 +105,7 @@ def stamp_version(manifest: str, version: str) -> str:
 def published_tags(owner: str, package: str, token: str) -> list[str]:
     """Return every tag on the package, so the day's counters can be read off them."""
     tags: list[str] = []
-    for version in ghcr_api.all_versions(owner, package, token):
+    for version in ghcr_api.all_versions(owner, package, token, allow_missing=True):
         tags.extend(ghcr_api.tags_of(version))
     return tags
 
@@ -122,7 +123,7 @@ def main(argv: list[str]) -> int:
         ),
     )
     parser.add_argument("--owner", default="madeByJansen")
-    parser.add_argument("--package", default="clearsignage-ha")
+    parser.add_argument("--channel", choices=CHANNELS, default=os.environ.get("CHANNEL", "stable"))
     parser.add_argument(
         "--set",
         dest="chosen",
@@ -134,8 +135,12 @@ def main(argv: list[str]) -> int:
 
     if args.stdin and not args.chosen:
         parser.error("--stdin stamps a version that is already known; pass --set")
-    if not args.stdin and not args.config:
-        parser.error("--config is required unless the manifest comes in on --stdin")
+    settings = channel_settings(args.channel)
+    if not args.stdin:
+        expected_config = Path(__file__).resolve().parents[1] / settings["addon_dir"] / "config.yaml"
+        if args.config and args.config.resolve() != expected_config:
+            parser.error("--config does not match the selected channel")
+        args.config = expected_config
 
     try:
         if args.chosen:
@@ -147,7 +152,7 @@ def main(argv: list[str]) -> int:
             chosen_date = (
                 dt.datetime.strptime(args.date, "%Y%m%d").date() if args.date else utc_date()
             )
-            version = next_version(published_tags(args.owner, args.package, token), chosen_date)
+            version = next_version(published_tags(args.owner, settings["package"], token), chosen_date)
 
         if args.stdin:
             # stdout is the manifest here, so the version is not printed: the caller

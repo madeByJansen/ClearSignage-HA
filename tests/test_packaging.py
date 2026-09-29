@@ -22,12 +22,22 @@ import pytest
 import yaml
 
 REPO = Path(__file__).resolve().parents[1]
-APP = REPO / "clearsignage"
+APP = REPO / "clearvenue"
 CONFIG = yaml.safe_load((APP / "config.yaml").read_text())
 BUILD = yaml.safe_load((APP / "build.yaml").read_text())
 RELEASE = yaml.safe_load((APP / "release.yaml").read_text())
 PIPELINE = (REPO / "jenkinsfile-ha").read_text()
 RECORDER = (REPO / "scripts" / "record-published-version.sh").read_text()
+
+
+@pytest.fixture(params=["stable", "beta", "dev"], autouse=True)
+def packaging_channel(request):
+    global APP, CONFIG, BUILD, RELEASE
+    folder = "clearvenue" if request.param == "stable" else "clearvenue_" + request.param
+    APP = REPO / folder
+    CONFIG = yaml.safe_load((APP / "config.yaml").read_text())
+    BUILD = yaml.safe_load((APP / "build.yaml").read_text())
+    RELEASE = yaml.safe_load((APP / "release.yaml").read_text())
 
 
 def _load_script(filename: str, module_name: str):
@@ -70,7 +80,7 @@ def _service_script(name: str, *, uncommented: bool = False) -> str:
     they must *not* call, so a test asserting the absence of one would match the sentence
     saying so. The shebang is kept — it is the interpreter, not a comment.
     """
-    text = (APP / "rootfs/etc/services.d/clearsignage" / name).read_text()
+    text = (APP / "rootfs/etc/services.d/clearvenue" / name).read_text()
     if not uncommented:
         return text
     lines = text.splitlines()
@@ -86,11 +96,6 @@ def test_every_yaml_file_parses():
         if ".git" in path.parts or "src" in path.parts:
             continue
         assert isinstance(yaml.safe_load(path.read_text()), dict), path
-
-
-def test_release_metadata_pins_a_reviewed_commit():
-    assert re.fullmatch(r"[0-9a-f]{40}", RELEASE["clearsignage_revision"])
-    assert RELEASE["clearsignage_ref"]
 
 
 def test_the_version_is_chosen_from_what_is_already_published():
@@ -179,7 +184,7 @@ def test_the_pipeline_chooses_the_version_and_records_what_it_published():
     registry yet, and an operator upgrading in that window gets a pull failure.
     """
     assert "./scripts/next-image-version.py" in PIPELINE
-    assert '--config clearsignage/config.yaml' in PIPELINE
+    assert '--channel "${CHANNEL}"' in PIPELINE
     assert 'GHCR_TOKEN="${GHCR_PSW}"' in PIPELINE
 
     record = PIPELINE.index("stage('Record the published version')")
@@ -254,27 +259,6 @@ def test_the_github_token_never_reaches_a_url_or_an_argument():
     assert PIPELINE.count("GIT_ASKPASS") >= 2, "the push step authenticates some other way"
 
 
-def test_the_two_pinned_fields_name_the_same_release():
-    """A half-done pin is how this file goes wrong, and it fails late.
-
-    `clearsignage_revision` is what the publish check compares the built commit against;
-    `clearsignage_ref` is what a person passes as `CLEARSIGNAGE_REF_OVERRIDE` to build
-    that commit. Editing one and leaving the other reads as pinned and publishes nothing:
-    the build clones one commit and the check refuses it against the other, on the agent,
-    after a full private checkout — instead of here, before anything is fetched.
-
-    Only asserted when the ref is itself a SHA, because a reviewed release tag is a
-    legitimate value there and cannot be compared to one.
-    """
-    ref = RELEASE["clearsignage_ref"]
-    if not re.fullmatch(r"[0-9a-f]{40}", ref):
-        return
-    assert ref == RELEASE["clearsignage_revision"], (
-        "release.yaml names two different commits; the pipeline would build "
-        f"{ref} and refuse to publish it against {RELEASE['clearsignage_revision']}"
-    )
-
-
 def test_the_app_version_is_stated_in_exactly_one_place():
     """One number to bump, and the manifest is where it has to be.
 
@@ -299,168 +283,8 @@ def test_the_app_version_is_stated_in_exactly_one_place():
         }
         assert not repeated, (
             f"{path.relative_to(REPO)} repeats the app version in {sorted(repeated)}; "
-            f"read it from clearsignage/config.yaml instead"
+            f"read it from clearvenue/config.yaml instead"
         )
-
-
-def test_a_release_from_prod_is_a_version_bump_and_nothing_else():
-    """The whole point of the rule: shipping released code costs one edit.
-
-    `prod` is ClearSignage's released branch — a commit only reaches it through that
-    repository's own release gate — so there is nothing for this repo to re-approve, and
-    asking anyway made every release two edits and every forgotten second edit a failed
-    build. Whatever prod is on the day is what publishing prod means.
-    """
-    gate = _load_publish_gate()
-    assert (
-        gate.publish_refusal(
-            push=True,
-            branch="prod",
-            override="",
-            built_revision="a" * 40,
-            pinned_revision="b" * 40,
-        )
-        is None
-    ), "a prod build was refused over a pin it does not need"
-
-
-def test_publishing_anything_but_prod_ships_only_the_commit_written_down():
-    """beta and main move on their own, and a typed commit is whatever was typed.
-
-    Those are the cases where nothing has vouched for the code, so release.yaml is what
-    says which commit is meant. The refusal names the commit built and the commit
-    recorded, because a message that says only "refused" sends you reading the pipeline.
-    """
-    gate = _load_publish_gate()
-    built, pinned = "a" * 40, "b" * 40
-
-    for branch in ("beta", "main"):
-        refusal = gate.publish_refusal(
-            push=True,
-            branch=branch,
-            override="",
-            built_revision=built,
-            pinned_revision=pinned,
-        )
-        assert refusal, f"{branch} published without the commit being recorded"
-        assert built in refusal and pinned in refusal, refusal
-
-    # An exact commit asked for by hand is the same case, even off prod's own branch.
-    assert gate.publish_refusal(
-        push=True,
-        branch="prod",
-        override=built,
-        built_revision=built,
-        pinned_revision=pinned,
-    ), "an override published without the commit being recorded"
-
-    # ...and recording it is what allows it.
-    assert (
-        gate.publish_refusal(
-            push=True,
-            branch="main",
-            override="",
-            built_revision=built,
-            pinned_revision=built,
-        )
-        is None
-    )
-
-
-def test_a_build_that_recorded_no_commit_publishes_nothing():
-    """Found by fat-fingering the check's own shell exercise, which is the point.
-
-    The revision is read from the fetched checkout and stamped on the image as
-    `org.opencontainers.image.revision`. Empty means the fetch did not leave what it was
-    supposed to — and a prod build would otherwise sail past, publishing an image that
-    cannot say which source it was built from.
-    """
-    gate = _load_publish_gate()
-    for branch in ("prod", "main"):
-        assert gate.publish_refusal(
-            push=True,
-            branch=branch,
-            override="",
-            built_revision="  ",
-            pinned_revision="b" * 40,
-        ), f"a {branch} build published without recording a commit"
-
-
-def test_a_dry_run_is_never_gated():
-    """`PUSH=false` is how a Dockerfile change is tried against any branch; it publishes
-    nothing, so there is nothing to refuse."""
-    gate = _load_publish_gate()
-    assert (
-        gate.publish_refusal(
-            push=False,
-            branch="main",
-            override="",
-            built_revision="a" * 40,
-            pinned_revision="b" * 40,
-        )
-        is None
-    )
-
-
-def test_the_pipeline_actually_runs_the_publish_check():
-    """A rule nothing calls is a rule nobody follows — which is how the first version of
-    this check sat in a comment for months, describing a review the pipeline never did."""
-    assert "./scripts/check-publish-allowed.py" in PIPELINE
-    assert "--built-revision" in PIPELINE
-    assert "--release-file clearsignage/release.yaml" in PIPELINE
-    # The parameters the rule decides on have to reach it, including the fallback for a
-    # job configuration too old to have them.
-    assert "PUBLISH_BRANCH=${params.CLEARSIGNAGE_REF ?: 'prod'}" in PIPELINE
-    assert "PUBLISH_OVERRIDE=${params.CLEARSIGNAGE_REF_OVERRIDE ?: ''}" in PIPELINE
-    assert "PUBLISH_PUSH=${params.PUSH}" in PIPELINE
-
-
-def test_pipeline_defaults_to_prod_and_pins_the_resolved_revision():
-    """A published image is a release, so it is built from released code.
-
-    This defaulted to `main`, which was right while main was the only branch that
-    existed. Once releases are cut from beta and prod, an add-on built from main
-    ships customers device code that has been through no release gate and is ahead
-    of what the rest of the fleet is running.
-    """
-    choices = re.search(r"name: 'CLEARSIGNAGE_REF',\s*choices: \[([^\]]*)\]", PIPELINE)
-    assert choices, "CLEARSIGNAGE_REF is no longer a branch choice"
-    listed = [value.strip().strip("'") for value in choices.group(1).split(",")]
-    assert listed[0] == "prod", f"the first choice is the Jenkins default; got {listed}"
-    assert listed == ["prod", "beta", "main"]
-
-    assert 'cat clearsignage/src/CLEARSIGNAGE_REF' in PIPELINE
-    assert '--build-arg "CLEARSIGNAGE_REF=${RESOLVED_REF}"' in PIPELINE
-
-
-def test_an_unset_parameter_falls_back_to_the_current_default():
-    """The fallback has to move with the default, or the change does not take.
-
-    A job configuration created before the parameter existed passes nothing, and
-    Jenkins does not backfill it. If the shell fallback still said `main`, those
-    jobs would go on building main while the UI claimed the default was prod —
-    the change would look applied and not be.
-    """
-    assert "${CLEARSIGNAGE_REF:-prod}" in PIPELINE
-    assert "CLEARSIGNAGE_REF:-main" not in PIPELINE
-
-    script = (REPO / "scripts" / "fetch-source.sh").read_text(encoding="utf-8")
-    assert 'REF="${CLEARSIGNAGE_REF:-prod}"' in script, (
-        "fetch-source.sh is runnable by hand and carries its own default; it must "
-        "agree with the pipeline's"
-    )
-
-
-def test_an_exact_commit_can_still_be_built():
-    """Reproducing a published image means naming its commit, which a choice cannot.
-
-    The pipeline records the resolved commit as the image revision, so that
-    capability is the point of recording it. `fetch-source.sh` already has the
-    SHA-fetch fallback; the override is what reaches it.
-    """
-    assert "name: 'CLEARSIGNAGE_REF_OVERRIDE'" in PIPELINE
-    # The override wins over the branch, and both fall back to the default.
-    assert '"${CLEARSIGNAGE_REF_OVERRIDE:-${CLEARSIGNAGE_REF:-prod}}"' in PIPELINE
 
 
 def test_pipeline_labels_the_image_with_the_resolved_revision():
@@ -581,21 +405,6 @@ def test_an_operators_own_copies_are_not_backed_up_as_well():
     assert any(one.rstrip("/") == "copies" for one in CONFIG["backup_exclude"])
 
 
-def test_the_add_on_is_called_clearvenue_and_its_slug_is_not():
-    """The rename, and the one field that must never move with it (Epic 149).
-
-    The Supervisor keys an add-on's persistent `/data` by its slug, so changing it makes this
-    a *different* add-on: a fresh empty `/data`, with `instances.json`, every screen's content
-    library and the venue database orphaned on the host while an operator looks at a venue
-    with no screens in it. There is no migration and this product does not do them (DP141).
-    """
-    assert CONFIG["name"] == "ClearVenue"
-    assert CONFIG["panel_title"] == "ClearVenue"
-    assert CONFIG["slug"] == "clearsignage", (
-        "changing the slug orphans every existing install's data"
-    )
-
-
 def test_this_platform_offers_no_local_names():
     """Decided in Epic 149, and the manifest is where it has to be true.
 
@@ -632,7 +441,7 @@ def test_the_run_script_execs_the_venue_rather_than_backgrounding_it():
     replication lane. Running the supervisor alone is what left an operator here with the
     Screens page and nothing else, so the module named is the whole of that fix.
     """
-    run = (APP / "rootfs/etc/services.d/clearsignage/run").read_text()
+    run = (APP / "rootfs/etc/services.d/clearvenue/run").read_text()
     assert re.search(r"^exec .*-m clearvenue$", run, re.M), run[-200:]
 
 
@@ -644,14 +453,14 @@ def test_the_run_script_says_which_platform_is_hosting_the_venue():
     would mount a sign-in of its own over an operator the Supervisor has already
     authenticated, and try to bind a privileged port it does not own.
     """
-    run = (APP / "rootfs/etc/services.d/clearsignage/run").read_text()
+    run = (APP / "rootfs/etc/services.d/clearvenue/run").read_text()
     assert re.search(r"^CLEARVENUE_HOST=home-assistant$", run, re.M), run[:400]
     assert "export CLEARVENUE_HOST" in run, "set but never exported reaches no child"
 
 
 def test_the_finish_script_brings_the_whole_app_down():
     """Otherwise s6 restarts one service and the app looks healthy with no screens."""
-    finish = (APP / "rootfs/etc/services.d/clearsignage/finish").read_text()
+    finish = (APP / "rootfs/etc/services.d/clearvenue/finish").read_text()
     assert "/run/s6/basedir/bin/halt" in finish
 
 
@@ -813,7 +622,7 @@ def test_the_pipeline_builds_both_architectures_into_one_manifest():
     assert "linux/amd64" in pipeline
     assert "imagetools create" in pipeline
     # The image the pipeline pushes must be the one the manifest tells HA to pull.
-    assert CONFIG["image"] in pipeline
+    assert "scripts/channels.py --field image" in pipeline
 
 
 def test_the_pipeline_keeps_only_the_current_and_previous_image_releases():
@@ -842,7 +651,7 @@ def test_the_pipeline_keeps_only_the_current_and_previous_image_releases():
 def test_the_pipeline_does_not_leave_private_source_on_the_agent():
     """The fetched tree is a full ClearSignage checkout."""
     pipeline = (REPO / "jenkinsfile-ha").read_text()
-    assert "rm -rf clearsignage/src" in pipeline
+    assert "rm -rf clearvenue/src clearvenue_beta/src clearvenue_dev/src" in pipeline
     assert "docker logout" in pipeline
 
 
@@ -873,7 +682,7 @@ def test_the_image_contains_the_package_the_run_script_execs():
     a published image.
     """
     fetch = (REPO / "scripts" / "fetch-source.sh").read_text(encoding="utf-8")
-    run = (APP / "rootfs/etc/services.d/clearsignage/run").read_text(encoding="utf-8")
+    run = (APP / "rootfs/etc/services.d/clearvenue/run").read_text(encoding="utf-8")
 
     execed = re.search(r"^exec .*-m (\w+)$", run, re.M)
     assert execed, "the run script execs no module at all"

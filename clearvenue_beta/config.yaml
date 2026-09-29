@@ -5,11 +5,8 @@
 # comments say which one — because the interesting half of this file is what it does
 # *not* ask for.
 #
-# **The display name is ClearVenue and the slug is not.** The code has called itself
-# ClearVenue since DP92 — the run script logs it and execs `-m clearvenue` — and only the
-# packaging still said ClearSignage. See the note on `slug` for why that one field did not
-# move with it.
-name: ClearVenue
+# Channel-specific identity. There are no legacy installs, so ClearVenue uses its product name as the stable slug.
+name: ClearVenue Beta
 # Written by the pipeline, not by hand: YYYYMMDD.NN from the build's UTC date and the tags
 # already in the GHCR package, the same scheme ClearSignage releases use. It is committed
 # back here after a successful publish, so this line is the record of what was published —
@@ -20,18 +17,14 @@ name: ClearVenue
 # not record; setting it to a version that was never published leaves every install failing
 # at the pull.
 version: "20260928.01"
-# **Never change this.** The Supervisor keys an add-on's persistent `/data` by its slug, so a
-# rename here makes this a *different* add-on: a fresh empty `/data`, and `instances.json`,
-# every screen's content library and the venue database orphaned on the host while an
-# operator looks at a venue with no screens in it. There is no migration and this product
-# does not do them (DP141), so the display name above moved in Epic 149 and this did not.
-slug: clearsignage
+# Each channel has its own slug so stable, beta and dev keep independent /data.
+slug: clearvenue_beta
 description: >-
-  Run one or more ClearSignage screens inside Home Assistant, and let this machine be your
+  Run ClearVenue and one or more ClearSignage screens inside Home Assistant, and let this machine be your
   venue's source of truth for live data — till prices, and how busy your spaces are. Each
   screen is a complete, independent signage player with its own content library, managed on
   itself.
-url: https://github.com/madeByJansen/ClearSignage-HA
+url: https://github.com/madeByJansen/ClearVenue-HA
 # A prebuilt image, not a local build. The Supervisor can build an app on the user's own
 # machine, and for a public add-on that is friendlier — but this image is built from a
 # *private* repository, so a local build would need ClearSignage credentials to exist on
@@ -44,7 +37,7 @@ url: https://github.com/madeByJansen/ClearSignage-HA
 # The registry is private. Home Assistant stores per-registry credentials of its own
 # (Supervisor's `docker/registries` API), so ghcr.io read access is configured once per
 # install and never appears in this file.
-image: ghcr.io/madebyjansen/clearsignage-ha
+image: ghcr.io/madebyjansen/clearvenue-beta
 # HA Yellow is a CM4 (aarch64); amd64 covers a NUC or a VM. 32-bit Arm is deliberately
 # absent — HA OS dropped it, and the device dependency pins are resolved against
 # manylinux aarch64/x86_64 wheels (see ClearSignage's `make device-lock`).
@@ -57,7 +50,7 @@ arch:
 ingress: true
 ingress_port: 8099
 panel_icon: mdi:television-play
-panel_title: ClearVenue
+panel_title: ClearVenue Beta
 # Admin-only: the panel leads to screens that can be reconfigured, and DP64 treats an
 # authenticated Home Assistant user as the authority for a live-state write.
 panel_admin: true

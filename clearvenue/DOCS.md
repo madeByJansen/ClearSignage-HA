@@ -9,6 +9,14 @@ like your till, reads the prices from it, and sends them out to the screens that
 them. Screens never hold that connection themselves — they receive prices, never access.
 It is also where this building's **occupancy** is counted and kept.
 
+## Release channels
+
+The repository offers ClearVenue (stable), ClearVenue Beta and ClearVenue Dev. Stable
+tracks upstream `prod`, beta tracks `beta`, and dev tracks `main`. Each is a separate app
+with independent data and image updates. Switching apps does not copy venue data.
+Run only one channel at a time on a host: they use host networking and the same ports.
+Use separate Home Assistant hosts for simultaneous testing.
+
 ## Installing
 
 1. **Add the registry credentials.** This app is a prebuilt image in a private registry,
@@ -99,7 +107,7 @@ capability genuinely is not here, not because it was left out:
 ## Putting a screen on a dashboard
 
 Add a **Webpage** card and point it at that screen's display. The fleet page shows each
-screen's address ready to paste — open ClearSignage from the sidebar and copy it from the
+screen's address ready to paste — open ClearVenue from the sidebar and copy it from the
 "Put on a dashboard" column:
 
 ```yaml

@@ -1,6 +1,6 @@
 """The recorder that puts the published version on the branch — driven against real repos.
 
-`clearsignage/config.yaml` is what Home Assistant reads: the Supervisor tracks an installed
+`clearvenue/config.yaml` is what Home Assistant reads: the Supervisor tracks an installed
 app by the version in it and pulls `image:<version>`. So an image published without that
 commit reaches nobody, and the commit has to land on the branch as it stands *now* — two
 architectures take twenty minutes to build, and main has usually moved by the time there
@@ -27,7 +27,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "record-published-version.sh"
 STAMPER = REPO_ROOT / "scripts" / "next-image-version.py"
-MANIFEST = "clearsignage/config.yaml"
+MANIFEST = "clearvenue/config.yaml"
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -203,9 +203,9 @@ def test_the_release_is_tagged_with_what_was_published(origin_and_workspace):
 
     done = _record(workspace, origin)
 
-    assert "Tagged v20260831.01." in done.stdout, done.stdout
+    assert "Tagged stable/v20260831.01." in done.stdout, done.stdout
     tags = _git(workspace, "ls-remote", "--tags", str(origin))
-    assert "refs/tags/v20260831.01" in tags
+    assert "refs/tags/stable/v20260831.01" in tags
 
     # A rerun that has nothing to commit still checks the tag, because a previous run may
     # have pushed the commit and died before it.
@@ -251,3 +251,33 @@ def test_recording_nothing_is_refused_outright(origin_and_workspace):
     assert done.returncode == 2
     assert "RECORD_VERSION is required" in done.stderr
     assert _tip(origin, workspace) == _git(workspace, "rev-parse", "origin/main")
+
+
+def test_recording_each_channel_preserves_the_other_manifests_and_unique_tags(origin_and_workspace):
+    origin, seed, workspace = origin_and_workspace
+    manifests = {'stable': MANIFEST, 'beta': 'clearvenue_beta/config.yaml', 'dev': 'clearvenue_dev/config.yaml'}
+    for channel in ('beta', 'dev'):
+        content = (REPO_ROOT / manifests[channel]).read_text()
+        content = re.sub(r'^version:.*$', 'version: "0.1.936"', content, flags=re.M)
+        _commit(seed, manifests[channel], content, 'seed ' + channel)
+    _git(seed, 'push', '-q', 'origin', 'main')
+    before = {channel: _git(seed, 'show', 'HEAD:' + path) for channel, path in manifests.items()}
+    for channel, path in manifests.items():
+        result = _record(workspace, origin, CHANNEL=channel)
+        assert result.returncode == 0, result.stderr
+        _git(workspace, 'fetch', '-q', str(origin), 'main')
+        for other, other_path in manifests.items():
+            recorded = _git(workspace, 'show', 'FETCH_HEAD:' + other_path)
+            if other == channel:
+                assert yaml.safe_load(recorded)['version'] == '20260831.01'
+                before[other] = recorded
+            else:
+                assert recorded == before[other]
+        assert f'refs/tags/{channel}/v20260831.01' in _git(workspace, 'ls-remote', '--tags', str(origin))
+
+
+def test_recorder_rejects_a_manifest_from_another_channel(origin_and_workspace):
+    origin, seed, workspace = origin_and_workspace
+    result = _record(workspace, origin, CHANNEL='dev', RECORD_MANIFEST=MANIFEST)
+    assert result.returncode == 2
+    assert 'does not match' in result.stderr

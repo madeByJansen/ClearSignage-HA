@@ -1,7 +1,7 @@
 #!/bin/bash
 # Record the version that was just published, on the branch as it stands now.
 #
-# Home Assistant reads the version from `clearsignage/config.yaml` **in this repository**:
+# Home Assistant reads the version from `<channel>/config.yaml` **in this repository**:
 # the Supervisor tracks an installed app by that literal and pulls image:<version>. So a
 # version that is published and not committed reaches nobody — the Supervisor goes on
 # offering the version the file still names. Recording is part of publishing, which is why
@@ -27,12 +27,13 @@
 # it.
 #
 # Environment:
+#   CHANNEL          stable (default), beta or dev
 #   RECORD_VERSION   the version that was published (required)
 #   RECORD_REMOTE    remote to fetch and push (default: origin; credentials come from
 #                    GIT_ASKPASS, never from the URL)
 #   RECORD_BRANCH    branch to record on      (default: main)
-#   RECORD_MANIFEST  path in the repo         (default: clearsignage/config.yaml)
-#   RECORD_TAG       tag to create            (default: v<version>; empty skips tagging)
+#   RECORD_MANIFEST  path in the repo         (default: <channel>/config.yaml)
+#   RECORD_TAG       tag to create            (default: <channel>/v<version>; empty skips tagging)
 #   RECORD_ATTEMPTS  how many times to re-read a moved branch (default: 3)
 #   RECORD_STAMPER   the stamper to use       (default: next-image-version.py beside this)
 #   RECORD_PYTHON    interpreter for it       (default: python3)
@@ -43,14 +44,19 @@ set -uo pipefail
 VERSION="${RECORD_VERSION:-}"
 REMOTE="${RECORD_REMOTE:-origin}"
 BRANCH="${RECORD_BRANCH:-main}"
-MANIFEST="${RECORD_MANIFEST:-clearsignage/config.yaml}"
-ATTEMPTS="${RECORD_ATTEMPTS:-3}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
+source "${HERE}/channel-env.sh" || exit 2
+MANIFEST="${RECORD_MANIFEST:-${ADDON_DIR}/config.yaml}"
+if [ "$MANIFEST" != "${ADDON_DIR}/config.yaml" ]; then
+    echo "RECORD_MANIFEST does not match CHANNEL=${CHANNEL}" >&2
+    exit 2
+fi
+ATTEMPTS="${RECORD_ATTEMPTS:-3}"
 STAMPER="${RECORD_STAMPER:-${HERE}/next-image-version.py}"
 # The interpreter is a knob so the tests can drive this with the one running them,
 # rather than depending on what the agent's system python3 happens to have installed.
 PYTHON="${RECORD_PYTHON:-python3}"
-TAG="${RECORD_TAG-v${VERSION}}"
+TAG="${RECORD_TAG-${CHANNEL}/v${VERSION}}"
 
 STAMPED=""
 INDEX=""
@@ -71,7 +77,7 @@ fi
 give_up() {
     echo "$1" >&2
     echo "THE IMAGE IS PUBLISHED but its version was not recorded." >&2
-    echo "ghcr.io/madebyjansen/clearsignage-ha:${VERSION} exists; ${BRANCH} still names an" >&2
+    echo "${IMAGE}:${VERSION} exists; ${BRANCH} still names an" >&2
     echo "older version, so Home Assistant will not offer it. Set" >&2
     echo "version: \"${VERSION}\" in ${MANIFEST} on ${BRANCH} to fix this — no rebuild is" >&2
     echo "needed, and rebuilding would only choose a different version. A branch protection" >&2
@@ -93,7 +99,7 @@ push_tag() {
     # -f only overwrites a *local* tag left by an earlier attempt; the push below is not
     # forced, so the remote's own tag can never be replaced by this.
     git -c user.name="Jenkins" -c user.email="ci@workplain.com" \
-        tag -af "$TAG" "$target" -m "ClearSignage HA ${VERSION}" >/dev/null 2>&1 ||
+        tag -af "$TAG" "$target" -m "ClearVenue ${CHANNEL} ${VERSION}" >/dev/null 2>&1 ||
         { echo "Could not create the tag ${TAG} locally; the version is recorded." >&2; return 0; }
     if git push -q "$REMOTE" "refs/tags/${TAG}" 2>/dev/null; then
         echo "Tagged ${TAG}."
@@ -150,7 +156,7 @@ while [ "$attempt" -le "$ATTEMPTS" ]; do
     # on. Nothing triggers on push today, and this is what keeps that from becoming a
     # loop the day something does.
     commit="$(git -c user.name="Jenkins" -c user.email="ci@workplain.com" \
-        commit-tree "$tree" -p "$base" -m "ClearSignage HA ${VERSION} [skip ci]")"
+        commit-tree "$tree" -p "$base" -m "ClearVenue ${CHANNEL} ${VERSION} [skip ci]")"
     [ -n "$commit" ] || give_up "Could not build the commit that records ${VERSION}."
 
     if git push -q "$REMOTE" "${commit}:refs/heads/${BRANCH}" 2>/dev/null; then

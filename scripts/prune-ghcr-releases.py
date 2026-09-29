@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import sys
@@ -11,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from channels import CHANNELS, channel_settings
 import ghcr_api  # noqa: E402  (the module sits beside this command, not on the path)
 
 
@@ -63,11 +65,13 @@ def versions_to_delete(versions: list[dict[str, object]], current: str) -> list[
 
 
 def main() -> int:
-    if len(sys.argv) != 4:
-        print(f"usage: {sys.argv[0]} OWNER PACKAGE CURRENT_VERSION", file=sys.stderr)
-        return 2
-
-    owner, package, current = sys.argv[1:]
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--owner", default="madeByJansen")
+    parser.add_argument("--channel", choices=CHANNELS, default=os.environ.get("CHANNEL", "stable"))
+    parser.add_argument("--current", required=True)
+    parser.add_argument("--apply", action="store_true", help="delete selected versions; otherwise dry-run")
+    args = parser.parse_args()
+    owner, package, current = args.owner, channel_settings(args.channel)["package"], args.current
     token = os.environ.get("GHCR_TOKEN")
     if not token:
         print("GHCR_TOKEN is required", file=sys.stderr)
@@ -78,10 +82,11 @@ def main() -> int:
 
     doomed = versions_to_delete(versions, current)
     for version_id in doomed:
-        with ghcr_api.request(f"{base}/{version_id}", token, method="DELETE"):
-            pass
-        print(f"Deleted GHCR package version {version_id}")
-    print(f"Pruned {len(doomed)} package versions; retained release {current} and its predecessor")
+        if args.apply:
+            with ghcr_api.request(f"{base}/{version_id}", token, method="DELETE"):
+                pass
+        print(f"{'Deleted' if args.apply else 'Would delete'} {package} version {version_id}")
+    print(f"Selected {len(doomed)} {package} versions; retained release {current} and its predecessor")
     return 0
 
 

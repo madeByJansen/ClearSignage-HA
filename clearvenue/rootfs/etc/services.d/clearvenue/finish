@@ -19,7 +19,7 @@ readonly exit_code_service="${1}"
 readonly exit_code_signal="${2}"
 
 bashio::log.info \
-    "ClearSignage supervisor exited (code ${exit_code_service}, signal ${exit_code_signal})."
+    "ClearVenue supervisor exited (code ${exit_code_service}, signal ${exit_code_signal})."
 
 # $1 is 256 when the service was killed by a signal, and $2 is then the signal number.
 # A stop from Home Assistant arrives that way and is not a failure, so the container

@@ -1,463 +1,210 @@
-// Build and publish the ClearSignage Home Assistant app image (Epic 119 Pass 4).
-//
-// The Supervisor can build an app on the user's own machine, and for a public
-// add-on that is the friendlier default. It is the wrong choice here for one
-// concrete reason: this image is built from a private repository, so a local
-// build would need ClearSignage credentials to exist on every customer's Home
-// Assistant.
-//
-// Publishing a prebuilt image keeps the source private, makes installation a
-// pull rather than a lengthy compile on a CM4, and means every install runs the
-// bytes that were tested rather than whatever resolves on the day.
-//
-// One multi-arch manifest, not per-architecture user-facing tags. The {arch}
-// placeholder in image: is deprecated; a manifest list lets the Supervisor pull
-// the correct image by itself.
-
+// ClearVenue HA packaging stays on main; CHANNEL selects the upstream source and image.
 pipeline {
     agent any
-
     options {
-        // One build at a time, because the version is chosen from the registry and only
-        // becomes taken when the image is pushed. Two runs started together both read the
-        // same tags, both choose YYYYMMDD.NN, and the second overwrites the first's image
-        // — a Docker tag is mutable, so nothing would refuse it and the repository would
-        // name one version for two different builds. Serialising the job closes that
-        // window entirely; nothing else here needs a lock.
+        // Use one publishing Jenkins job. Registry version allocation is not atomic.
         disableConcurrentBuilds()
     }
-
     parameters {
-        // Which ClearSignage branch this image is built from.
-        //
-        // `prod` is first, and therefore the default, because a published add-on image
-        // is a release: it reaches customers' Home Assistant installs, so it should
-        // carry code that has been through the release gate rather than whatever is on
-        // main today. It defaulted to `main`, which was right while main was the only
-        // branch that existed and wrong the moment releases started being cut from
-        // beta and prod.
-        //
-        // Ordered by how much has been asked of the code, not alphabetically.
         choice(
-            name: 'CLEARSIGNAGE_REF',
-            choices: ['prod', 'beta', 'main'],
-            description: 'ClearSignage branch to build from. prod is released code; beta is the pre-release channel; main is development.'
+            name: 'CHANNEL',
+            choices: ['stable', 'beta', 'dev'],
+            description: 'stable → prod, beta → beta, dev → main in ClearSignage.'
         )
-
-        // A branch is what you want almost always; an exact commit is what you want
-        // when reproducing a published image. The pipeline records the resolved commit
-        // as the image revision, so rebuilding one means naming that commit — which a
-        // choice alone cannot express, and fetch-source.sh already handles.
         string(
             name: 'CLEARSIGNAGE_REF_OVERRIDE',
             defaultValue: '',
-            description: 'Optional exact tag or commit SHA to build instead of the branch above. Leave empty to use the branch.'
+            description: 'Optional full 40-character upstream commit SHA. Publishing requires the selected channel release.yaml pin.'
         )
-
-        booleanParam(
-            name: 'PUSH',
-            defaultValue: true,
-            description: 'Push the manifest. Off builds both architectures and discards the output.'
-        )
+        booleanParam(name: 'PUSH', defaultValue: true,
+            description: 'Publish both architectures, record the selected channel version on main, and prune that channel.')
     }
-
     environment {
         REGISTRY = 'ghcr.io'
-        // Docker image repository components must be lowercase, even though the
-        // GitHub organisation's display name contains capitals.
-        IMAGE    = 'ghcr.io/madebyjansen/clearsignage-ha'
-
-        // Jenkins username/password credential for GHCR.
-        //
-        // Jenkins exposes:
-        //   GHCR_USR
-        //   GHCR_PSW
-        //
-        // The token requires permission to write packages.
+        // Existing credential IDs are retained so the current Jenkins job keeps working.
         GHCR = credentials('ghcr-clearsignage')
     }
-
     stages {
-        stage('Verify tools') {
+        stage('Select channel') {
             steps {
-                sh '''#!/usr/bin/env bash
-                    set -euo pipefail
-
-                    docker --version
-                    docker buildx version
-
-                    # Register ARM64 emulation for building the Home Assistant
-                    # Yellow image on the AMD64 Jenkins machine.
-                    docker run --privileged --rm \
-                        tonistiigi/binfmt \
-                        --install arm64
-
-                    # Reuse the named builder when it already exists.
-                    if docker buildx inspect clearsignage >/dev/null 2>&1; then
-                        docker buildx use clearsignage
-                        docker buildx inspect --bootstrap
-                    else
-                        docker buildx create \
-                            --name clearsignage \
-                            --driver docker-container \
-                            --use \
-                            --bootstrap
-                    fi
-                '''
+                script {
+                    env.CHANNEL = params.CHANNEL ?: 'stable'
+                    env.ADDON_DIR = sh(script: 'python3 scripts/channels.py --field addon_dir', returnStdout: true).trim()
+                    env.PACKAGE = sh(script: 'python3 scripts/channels.py --field package', returnStdout: true).trim()
+                    env.SOURCE_BRANCH = sh(script: 'python3 scripts/channels.py --field branch', returnStdout: true).trim()
+                    env.IMAGE = sh(script: 'python3 scripts/channels.py --field image', returnStdout: true).trim()
+                }
+                echo "ClearVenue ${env.CHANNEL}: ClearSignage/${env.SOURCE_BRANCH} → ${env.IMAGE}"
             }
         }
-
         stage('Validate packaging') {
             steps {
                 sh '''#!/usr/bin/env bash
                     set -euo pipefail
-
                     rm -rf .venv
                     python3 -m venv .venv
-
-                    .venv/bin/python -m pip install \
-                        --quiet \
-                        --upgrade \
-                        pip
-
-                    .venv/bin/python -m pip install \
-                        --quiet \
-                        pytest \
-                        pyyaml
-
+                    .venv/bin/python -m pip install --quiet pytest pyyaml
                     .venv/bin/python -m pytest tests -q
+                    .venv/bin/python scripts/sync-channel-packaging.py --check
                 '''
             }
         }
-
+        stage('Verify tools') {
+            steps {
+                sh '''#!/usr/bin/env bash
+                    set -euo pipefail
+                    docker --version
+                    docker buildx version
+                    docker run --privileged --rm tonistiigi/binfmt --install arm64
+                    if docker buildx inspect clearvenue >/dev/null 2>&1; then
+                        docker buildx use clearvenue
+                        docker buildx inspect --bootstrap
+                    else
+                        docker buildx create --name clearvenue --driver docker-container --use --bootstrap
+                    fi
+                '''
+            }
+        }
         stage('Fetch ClearSignage source') {
             steps {
-                // The Jenkins SCM checkout credential is only used by Jenkins'
-                // own checkout step. It is not automatically available to a
-                // separate git clone executed by fetch-source.sh.
-                //
-                // Bind the existing private-repository credential and expose it
-                // to Git through a temporary GIT_ASKPASS script. This avoids
-                // putting the PAT in the repository URL, shell arguments or Git
-                // configuration.
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'GithubPAT-Workplain-com',
-                        usernameVariable: 'GITHUB_USERNAME',
-                        passwordVariable: 'GITHUB_TOKEN'
-                    )
-                ]) {
+                withCredentials([usernamePassword(
+                    credentialsId: 'GithubPAT-Workplain-com',
+                    usernameVariable: 'GITHUB_USERNAME', passwordVariable: 'GITHUB_TOKEN'
+                )]) {
                     sh '''#!/usr/bin/env bash
                         set -euo pipefail
-
                         ASKPASS_SCRIPT="$(mktemp)"
                         trap 'rm -f "${ASKPASS_SCRIPT}"' EXIT
-
                         cat > "${ASKPASS_SCRIPT}" <<'EOF'
 #!/usr/bin/env bash
-
 case "$1" in
-    *Username*)
-        printf '%s\\n' "${GITHUB_USERNAME}"
-        ;;
-    *Password*)
-        printf '%s\\n' "${GITHUB_TOKEN}"
-        ;;
-    *)
-        exit 1
-        ;;
+    *Username*) printf '%s\\n' "${GITHUB_USERNAME}" ;;
+    *Password*) printf '%s\\n' "${GITHUB_TOKEN}" ;;
+    *) exit 1 ;;
 esac
 EOF
-
                         chmod 700 "${ASKPASS_SCRIPT}"
-
-                        export GIT_ASKPASS="${ASKPASS_SCRIPT}"
-                        export GIT_TERMINAL_PROMPT=0
-
-                        # An exact tag or commit wins over the branch choice when one
-                        # was given; otherwise the branch is used.
-                        #
-                        # Older Jenkins job configurations may not expose a newly added
-                        # parameter until after the Jenkinsfile is reloaded, so an empty
-                        # or missing value has to mean the same as the UI default —
-                        # which is now prod. Getting this fallback wrong is how a job
-                        # silently keeps building the old default after the default
-                        # changed.
-                        CLEARSIGNAGE_REF="${CLEARSIGNAGE_REF_OVERRIDE:-${CLEARSIGNAGE_REF:-prod}}" \
-                            ./scripts/fetch-source.sh
+                        export GIT_ASKPASS="${ASKPASS_SCRIPT}" GIT_TERMINAL_PROMPT=0
+                        # No feature-branch packaging can publish or record onto main.
+                        if [ "${PUSH:-true}" = true ]; then
+                            git fetch --quiet origin main
+                            test "$(git rev-parse HEAD)" = "$(git rev-parse FETCH_HEAD)" || {
+                                echo 'Publish from the current packaging main; use PUSH=false for feature branches.' >&2
+                                exit 1
+                            }
+                        fi
+                        ./scripts/fetch-source.sh
                     '''
                 }
-
                 script {
-                    env.RESOLVED_REF = sh(
-                        script: '''
-                            set -e
-                            cat clearsignage/src/CLEARSIGNAGE_REF
-                        ''',
-                        returnStdout: true
-                    ).trim()
-
-                    // What a release costs, and where the line is.
-                    //
-                    // Building `prod` publishes what prod is at the time, with nothing to
-                    // re-pin first: prod is ClearSignage's *released* branch, and a commit
-                    // only reaches it through that repository's own release gate. So a
-                    // release here is one edit — bump `version` in config.yaml — and this
-                    // run. Asking for a second edit that only ever restates "yes, prod" is
-                    // ceremony, and ceremony gets worked around rather than read.
-                    //
-                    // Publishing `beta`, `main` or a hand-typed commit is the case where
-                    // nothing has vouched for the code yet, and that still may only ship
-                    // the commit clearsignage/release.yaml records.
-                    //
-                    // The rule lives in a script because a Jenkinsfile cannot be tested and
-                    // that script can — the same reason prune-ghcr-releases.py holds the
-                    // retention rule. Nothing is gated when PUSH is off: that build
-                    // publishes nothing, and it is how a Dockerfile change is tried out
-                    // against any branch.
-                    //
-                    // Every one of these is read with a shell default, because withEnv
-                    // *removes* a variable whose value is empty rather than setting it to
-                    // "". No exact commit asked for is the ordinary case, so PUBLISH_OVERRIDE
-                    // arrives as nothing at all, and `set -u` then kills the step with
-                    // "unbound variable" before the script it feeds can apply its own
-                    // default. The defaults fail closed: an unset push flag is treated as a
-                    // publish, so a variable going missing can only ever refuse too much.
+                    env.RESOLVED_REF = sh(script: 'cat "${ADDON_DIR}/src/CLEARSIGNAGE_REF"', returnStdout: true).trim()
                     withEnv([
                         "PUBLISH_PUSH=${params.PUSH}",
-                        "PUBLISH_BRANCH=${params.CLEARSIGNAGE_REF ?: 'prod'}",
                         "PUBLISH_OVERRIDE=${params.CLEARSIGNAGE_REF_OVERRIDE ?: ''}"
                     ]) {
                         sh '''#!/usr/bin/env bash
                             set -euo pipefail
-
-                            ./scripts/check-publish-allowed.py \
+                            .venv/bin/python ./scripts/check-publish-allowed.py \
                                 --push "${PUBLISH_PUSH:-true}" \
-                                --branch "${PUBLISH_BRANCH:-prod}" \
+                                --channel "${CHANNEL}" \
+                                --branch "${SOURCE_BRANCH}" \
                                 --override "${PUBLISH_OVERRIDE:-}" \
                                 --built-revision "${RESOLVED_REF:-}" \
-                                --release-file clearsignage/release.yaml
+                                --release-file "${ADDON_DIR}/release.yaml"
                         '''
                     }
-
-                    // Only now, once this build is allowed to publish at all: YYYYMMDD.NN
-                    // from the build's UTC date and the tags already in the GHCR package —
-                    // the same scheme ClearSignage releases use, and chosen the same way,
-                    // from the artefacts that exist rather than from a number somebody
-                    // remembered to edit.
-                    //
-                    // It is stamped straight into config.yaml because that manifest is
-                    // where Home Assistant reads it: the Supervisor tracks an installed app
-                    // by that literal and pulls image:<version>. The stamp is committed back
-                    // to the repository after a successful publish, so the file records what
-                    // was published rather than promising what will be.
-                    //
-                    // After the check rather than before it so a refused build touches
-                    // neither the manifest nor the registry.
                     env.APP_VERSION = sh(
                         script: '''#!/usr/bin/env bash
                             set -euo pipefail
-
-                            GHCR_TOKEN="${GHCR_PSW}" ./scripts/next-image-version.py \
-                                --owner madeByJansen \
-                                --package clearsignage-ha \
-                                --config clearsignage/config.yaml
-                        ''',
-                        returnStdout: true
+                            GHCR_TOKEN="${GHCR_PSW}" .venv/bin/python ./scripts/next-image-version.py \
+                                --channel "${CHANNEL}"
+                        ''', returnStdout: true
                     ).trim()
                 }
-
-                echo "Building ClearSignage ${env.RESOLVED_REF} as app version ${env.APP_VERSION}"
             }
         }
-
         stage('Build and publish') {
             steps {
                 sh '''#!/usr/bin/env bash
                     set -euo pipefail
-
-                    AARCH64_FROM="$(
-                        python3 -c "
-import yaml
-with open('clearsignage/build.yaml', encoding='utf-8') as file:
-    print(yaml.safe_load(file)['build_from']['aarch64'])
-"
-                    )"
-
-                    AMD64_FROM="$(
-                        python3 -c "
-import yaml
-with open('clearsignage/build.yaml', encoding='utf-8') as file:
-    print(yaml.safe_load(file)['build_from']['amd64'])
-"
-                    )"
-
-                    if [ "${PUSH}" = "true" ]; then
-                        printf '%s' "${GHCR_PSW}" |
-                            docker login "${REGISTRY}" \
-                                --username "${GHCR_USR}" \
-                                --password-stdin
-
-                        OUTPUT_MODE="--push"
-
+                    build_from() {
+                        .venv/bin/python -c 'import sys,yaml; print(yaml.safe_load(open(sys.argv[1]))["build_from"][sys.argv[2]])' \
+                            "${ADDON_DIR}/build.yaml" "$1"
+                    }
+                    if [ "${PUSH:-true}" = true ]; then
+                        printf '%s' "${GHCR_PSW}" | docker login "${REGISTRY}" --username "${GHCR_USR}" --password-stdin
+                        output_mode=(--push)
                     else
-                        OUTPUT_MODE="--output=type=cacheonly"
+                        output_mode=(--output=type=cacheonly)
                     fi
-
                     build_one() {
-                        PLATFORM="$1"
-                        BUILD_FROM="$2"
-                        ARCH_TAG="$3"
-
-                        docker buildx build \
-                            --builder clearsignage \
-                            --platform "${PLATFORM}" \
-                            --build-arg "BUILD_FROM=${BUILD_FROM}" \
+                        docker buildx build --builder clearvenue \
+                            --platform "$1" --build-arg "BUILD_FROM=$2" \
                             --build-arg "CLEARSIGNAGE_REF=${RESOLVED_REF}" \
                             --label "org.opencontainers.image.revision=${RESOLVED_REF}" \
                             --label "org.opencontainers.image.version=${APP_VERSION}" \
-                            --tag "${IMAGE}:${APP_VERSION}-${ARCH_TAG}" \
-                            ${OUTPUT_MODE} \
-                            clearsignage
+                            --tag "${IMAGE}:${APP_VERSION}-$3" \
+                            "${output_mode[@]}" "${ADDON_DIR}"
                     }
-
-                    # Home Assistant Yellow / ARM64.
-                    build_one \
-                        "linux/arm64" \
-                        "${AARCH64_FROM}" \
-                        "aarch64"
-
-                    # AMD64 is retained for Home Assistant installations running
-                    # on Intel or AMD hardware.
-                    build_one \
-                        "linux/amd64" \
-                        "${AMD64_FROM}" \
-                        "amd64"
-
-                    if [ "${PUSH}" = "true" ]; then
-                        # Assemble the architecture-specific images into the
-                        # user-facing multi-architecture manifest.
+                    build_one linux/arm64 "$(build_from aarch64)" aarch64
+                    build_one linux/amd64 "$(build_from amd64)" amd64
+                    if [ "${PUSH:-true}" = true ]; then
                         docker buildx imagetools create \
-                            --tag "${IMAGE}:${APP_VERSION}" \
-                            --tag "${IMAGE}:latest" \
-                            "${IMAGE}:${APP_VERSION}-aarch64" \
-                            "${IMAGE}:${APP_VERSION}-amd64"
-
-                        docker buildx imagetools inspect \
-                            "${IMAGE}:${APP_VERSION}"
+                            --tag "${IMAGE}:${APP_VERSION}" --tag "${IMAGE}:latest" \
+                            "${IMAGE}:${APP_VERSION}-aarch64" "${IMAGE}:${APP_VERSION}-amd64"
+                        docker buildx imagetools inspect "${IMAGE}:${APP_VERSION}"
                     fi
                 '''
             }
         }
-
-        // Home Assistant reads the version from config.yaml *in this repository*, not
-        // from the image, so a published version nobody committed reaches no install: the
-        // Supervisor would go on offering the tag the file still names. Recording it is
-        // therefore part of publishing, not bookkeeping after it.
-        //
-        // Deliberately after the push. A commit written first would advertise a version
-        // that does not exist in the registry yet, and an operator upgrading in that
-        // window gets a pull failure that reads like a broken repository.
-        //
-        // The commit is made on top of whatever main is by then rather than on the commit
-        // this build checked out — two architectures take a while, and main has usually
-        // moved. The work is a script, not a heredoc, for the reason ClearSignage's QA
-        // report courier is one: a Jenkinsfile string can only be asserted by grepping it,
-        // and a grep cannot tell a push parented on the right commit from one parented on
-        // the wrong one. tests/test_record_version.py drives it against real repositories.
         stage('Record the published version') {
-            when {
-                expression { params.PUSH }
-            }
+            when { expression { params.PUSH } }
             steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'GithubPAT-Workplain-com',
-                        usernameVariable: 'GIT_USERNAME',
-                        passwordVariable: 'GIT_PASSWORD'
-                    )
-                ]) {
+                withCredentials([usernamePassword(
+                    credentialsId: 'GithubPAT-Workplain-com',
+                    usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD'
+                )]) {
                     sh '''#!/usr/bin/env bash
                         set -euo pipefail
-
-                        # Jenkins' own checkout credential does not carry over to git
-                        # commands in a later step, and the PAT does not go in the remote
-                        # URL, shell arguments or git config — same reason as the fetch
-                        # stage above, so the same temporary GIT_ASKPASS.
                         ASKPASS_SCRIPT="$(mktemp)"
                         trap 'rm -f "${ASKPASS_SCRIPT}"' EXIT
-
                         cat > "${ASKPASS_SCRIPT}" <<'EOF'
 #!/usr/bin/env bash
-
 case "$1" in
-    *Username*)
-        printf '%s\\n' "${GIT_USERNAME}"
-        ;;
-    *Password*)
-        printf '%s\\n' "${GIT_PASSWORD}"
-        ;;
-    *)
-        exit 1
-        ;;
+    *Username*) printf '%s\\n' "${GIT_USERNAME}" ;;
+    *Password*) printf '%s\\n' "${GIT_PASSWORD}" ;;
+    *) exit 1 ;;
 esac
 EOF
-
                         chmod 700 "${ASKPASS_SCRIPT}"
-
-                        export GIT_ASKPASS="${ASKPASS_SCRIPT}"
-                        export GIT_TERMINAL_PROMPT=0
-
-                        RECORD_VERSION="${APP_VERSION}" \
+                        export GIT_ASKPASS="${ASKPASS_SCRIPT}" GIT_TERMINAL_PROMPT=0
+                        RECORD_VERSION="${APP_VERSION}" RECORD_BRANCH=main \
+                            RECORD_PYTHON="${WORKSPACE}/.venv/bin/python" \
                             ./scripts/record-published-version.sh
                     '''
                 }
             }
         }
-
         stage('Prune old releases') {
-            when {
-                expression { params.PUSH }
-            }
+            when { expression { params.PUSH } }
             steps {
                 sh '''#!/usr/bin/env bash
                     set -euo pipefail
-
-                    # The package contains a multi-architecture index plus the two
-                    # architecture tags for every release. Keep all three objects for
-                    # N and N-1, and delete tagged objects belonging to older releases.
-                    # The Jenkins PAT therefore needs delete:packages in addition to
-                    # the package write permission used above.
-                    GHCR_TOKEN="${GHCR_PSW}" \
-                        ./scripts/prune-ghcr-releases.py \
-                        madeByJansen \
-                        clearsignage-ha \
-                        "${APP_VERSION}"
+                    GHCR_TOKEN="${GHCR_PSW}" .venv/bin/python ./scripts/prune-ghcr-releases.py \
+                        --channel "${CHANNEL}" --current "${APP_VERSION}" --apply
                 '''
             }
         }
     }
-
     post {
         always {
             sh '''#!/usr/bin/env bash
                 set +e
-
                 docker logout "${REGISTRY}"
-
-                # Remove the private ClearSignage checkout and temporary Python
-                # environment from the Jenkins workspace.
-                rm -rf clearsignage/src
-                rm -rf .venv
+                rm -rf clearvenue/src clearvenue_beta/src clearvenue_dev/src .venv
             '''
         }
-
-        success {
-            echo "Published ${env.IMAGE}:${env.APP_VERSION} from ClearSignage commit ${env.RESOLVED_REF}"
-        }
-
-        failure {
-            echo 'ClearSignage Home Assistant image build failed.'
-        }
+        success { echo "Completed ClearVenue ${env.CHANNEL} ${env.APP_VERSION}; PUSH=${params.PUSH}; upstream ${env.RESOLVED_REF}" }
+        failure { echo 'ClearVenue Home Assistant image build failed.' }
     }
 }

@@ -6,7 +6,7 @@
 # *not* ask for.
 #
 # Channel-specific identity. There are no legacy installs, so ClearVenue uses its product name as the stable slug.
-name: ClearVenue
+name: ClearVenue Dev
 # Written by the pipeline, not by hand: YYYYMMDD.NN from the build's UTC date and the tags
 # already in the GHCR package, the same scheme ClearSignage releases use. It is committed
 # back here after a successful publish, so this line is the record of what was published —
@@ -18,7 +18,7 @@ name: ClearVenue
 # at the pull.
 version: "20260928.01"
 # Each channel has its own slug so stable, beta and dev keep independent /data.
-slug: clearvenue
+slug: clearvenue_dev
 description: >-
   Run ClearVenue and one or more ClearSignage screens inside Home Assistant, and let this machine be your
   venue's source of truth for live data — till prices, and how busy your spaces are. Each
@@ -37,7 +37,7 @@ url: https://github.com/madeByJansen/ClearVenue-HA
 # The registry is private. Home Assistant stores per-registry credentials of its own
 # (Supervisor's `docker/registries` API), so ghcr.io read access is configured once per
 # install and never appears in this file.
-image: ghcr.io/madebyjansen/clearvenue
+image: ghcr.io/madebyjansen/clearvenue-dev
 # HA Yellow is a CM4 (aarch64); amd64 covers a NUC or a VM. 32-bit Arm is deliberately
 # absent — HA OS dropped it, and the device dependency pins are resolved against
 # manylinux aarch64/x86_64 wheels (see ClearSignage's `make device-lock`).
@@ -50,7 +50,7 @@ arch:
 ingress: true
 ingress_port: 8099
 panel_icon: mdi:television-play
-panel_title: ClearVenue
+panel_title: ClearVenue Dev
 # Admin-only: the panel leads to screens that can be reconfigured, and DP64 treats an
 # authenticated Home Assistant user as the authority for a live-state write.
 panel_admin: true
