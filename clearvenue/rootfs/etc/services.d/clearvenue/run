@@ -15,9 +15,8 @@
 # lane, which is what this add-on shipped before and why an operator here found the
 # Screens page and nothing else. Every Home Assistant install is a venue.
 #
-# The fleet does not move. `clearvenue.paths` resolves its root to `/data` on this
-# platform — the same `/data/instances.json` and `/data/instances/<n>/` the supervisor
-# has always used — so an existing install keeps its screens and their content.
+# `clearvenue.paths` resolves its root to `/data` on this platform. Home Assistant
+# mounts independent persistent storage for each channel slug.
 set -euo pipefail
 
 export CLEARVENUE_HOST

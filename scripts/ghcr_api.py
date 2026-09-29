@@ -9,6 +9,7 @@ called by those.
 from __future__ import annotations
 
 import json
+import urllib.error
 import urllib.parse
 import urllib.request
 import urllib.response
@@ -31,19 +32,42 @@ def request(url: str, token: str, method: str = "GET") -> urllib.response.addinf
     return urllib.request.urlopen(urllib.request.Request(url, headers=headers, method=method))
 
 
-def all_versions(owner: str, package: str, token: str) -> list[dict[str, object]]:
+def all_versions(owner: str, package: str, token: str, *, allow_missing=False) -> list[dict[str, object]]:
     """Return every version object in the package, following pagination."""
     base = versions_url(owner, package)
     versions: list[dict[str, object]] = []
     page = 1
     while True:
-        with request(f"{base}?per_page={PAGE_SIZE}&page={page}", token) as response:
-            batch = json.load(response)
+        try:
+            with request(f"{base}?per_page={PAGE_SIZE}&page={page}", token) as response:
+                batch = json.load(response)
+        except urllib.error.HTTPError as error:
+            # A new channel has no package yet. A 404 alone may also hide an auth
+            # failure, so require a successful owner package listing before bootstrapping.
+            if error.code != 404 or not allow_missing or page != 1:
+                raise
+            names = package_names(owner, token)
+            if package in names:
+                raise
+            return []
         versions.extend(batch)
         if len(batch) < PAGE_SIZE:
             break
         page += 1
     return versions
+
+
+def package_names(owner: str, token: str) -> set[str]:
+    names = set()
+    page = 1
+    owner = urllib.parse.quote(owner, safe="")
+    while True:
+        with request(f"https://api.github.com/orgs/{owner}/packages?package_type=container&per_page={PAGE_SIZE}&page={page}", token) as response:
+            batch = json.load(response)
+        names.update(item["name"] for item in batch)
+        if len(batch) < PAGE_SIZE:
+            return names
+        page += 1
 
 
 def tags_of(version: dict[str, object]) -> list[str]:

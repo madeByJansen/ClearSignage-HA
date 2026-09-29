@@ -65,11 +65,11 @@ ENV PATH="/opt/venv/bin:${PATH}" \
     PYTHONPATH="/opt/clearsignage:/opt/clearsignage/device:/opt/clearsignage/shared"
 
 COPY rootfs/ /
-RUN chmod a+x /etc/services.d/clearsignage/run /etc/services.d/clearsignage/finish
+RUN chmod a+x /etc/services.d/clearvenue/run /etc/services.d/clearvenue/finish
 
 LABEL \
-    io.hass.name="ClearSignage" \
-    io.hass.description="Run one or more ClearSignage screens inside Home Assistant" \
+    io.hass.name="ClearVenue Dev" \
+    io.hass.description="Run ClearVenue inside Home Assistant" \
     io.hass.type="addon" \
     org.opencontainers.image.source="https://github.com/madeByJansen/clearsignage" \
     org.opencontainers.image.revision="${CLEARSIGNAGE_REF}"

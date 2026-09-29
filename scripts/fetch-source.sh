@@ -24,14 +24,18 @@
 # platform hosts it is a value inside that package rather than a second implementation.
 set -euo pipefail
 
-# prod, not main: a published add-on image is a release and reaches customers'
+# Stable uses prod: a published add-on image is a release and reaches customers'
 # Home Assistant installs, so the default has to be code that went through the
-# release gate. Overridden per build by the pipeline's branch choice, or by an
-# exact tag/commit when reproducing a published image.
-REF="${CLEARSIGNAGE_REF:-prod}"
-REPO="${CLEARSIGNAGE_REPO:-https://github.com/madeByJansen/clearsignage.git}"
+# release gate. The channel selects its branch; an exact SHA can override it.
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-DEST="${HERE}/clearsignage/src"
+source "${HERE}/scripts/channel-env.sh"
+REF="${CLEARSIGNAGE_REF_OVERRIDE:-${SOURCE_BRANCH}}"
+if [ -n "${CLEARSIGNAGE_REF_OVERRIDE:-}" ] && [[ ! "${REF}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "CLEARSIGNAGE_REF_OVERRIDE must be a full 40-character commit SHA" >&2
+    exit 2
+fi
+REPO="${CLEARSIGNAGE_REPO:-https://github.com/madeByJansen/clearsignage.git}"
+DEST="${HERE}/${ADDON_DIR}/src"
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 

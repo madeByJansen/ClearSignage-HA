@@ -3,17 +3,17 @@ name: Build Home Assistant app
 on:
   workflow_dispatch:
     inputs:
-      clearsignage_ref:
-        description: ClearSignage branch to build from
+      channel:
+        description: ClearVenue release channel
         required: true
-        default: prod
+        default: stable
         type: choice
         options:
-          - prod
+          - stable
           - beta
-          - main
+          - dev
       clearsignage_ref_override:
-        description: Optional exact tag or commit SHA to build instead of the branch
+        description: Optional full 40-character upstream commit SHA (publishing requires channel approval pin)
         required: false
         default: ""
         type: string
@@ -25,7 +25,7 @@ on:
 
 # Version selection reads the registry before publishing, so release runs must not overlap.
 concurrency:
-  group: clearsignage-homeassistant-release
+  group: clearvenue-homeassistant-release
   cancel-in-progress: false
 
 permissions:
@@ -35,7 +35,7 @@ permissions:
 env:
   REGISTRY: ghcr.io
   # OCI repository names are lowercase, irrespective of the GitHub display name.
-  IMAGE: ghcr.io/madebyjansen/clearsignage-ha
+  CHANNEL: ${{ inputs.channel }}
 
 jobs:
   build:
@@ -58,6 +58,16 @@ jobs:
       - name: Validate packaging
         run: python -m pytest tests -q
 
+      - name: Select channel
+        run: |
+          python scripts/sync-channel-packaging.py --check
+          source scripts/channel-env.sh
+          printf '%s\n' "ADDON_DIR=${ADDON_DIR}" "SOURCE_BRANCH=${SOURCE_BRANCH}" "IMAGE=${IMAGE}" >> "${GITHUB_ENV}"
+
+      - name: Require packaging main for publishing
+        if: inputs.push
+        run: test "${GITHUB_REF}" = refs/heads/main
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
@@ -66,13 +76,13 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
-          name: clearsignage
+          name: clearvenue
           driver: docker-container
 
       - name: Fetch ClearSignage source
         id: source
         env:
-          CLEARSIGNAGE_REF: ${{ inputs.clearsignage_ref_override || inputs.clearsignage_ref }}
+          CLEARSIGNAGE_REF_OVERRIDE: ${{ inputs.clearsignage_ref_override }}
           GITHUB_USERNAME: x-access-token
           GITHUB_TOKEN: ${{ secrets.CLEARSIGNAGE_PAT }}
         run: |
@@ -93,21 +103,21 @@ jobs:
           export GIT_TERMINAL_PROMPT=0
 
           ./scripts/fetch-source.sh
-          printf 'revision=%s\n' "$(cat clearsignage/src/CLEARSIGNAGE_REF)" >> "${GITHUB_OUTPUT}"
+          printf 'revision=%s\n' "$(cat "${ADDON_DIR}/src/CLEARSIGNAGE_REF")" >> "${GITHUB_OUTPUT}"
 
       - name: Check whether publishing is allowed
         env:
           PUSH: ${{ inputs.push }}
-          BRANCH: ${{ inputs.clearsignage_ref }}
           OVERRIDE: ${{ inputs.clearsignage_ref_override }}
           RESOLVED_REF: ${{ steps.source.outputs.revision }}
         run: |
           ./scripts/check-publish-allowed.py \
             --push "${PUSH}" \
-            --branch "${BRANCH}" \
+            --channel "${CHANNEL}" \
+            --branch "${SOURCE_BRANCH}" \
             --override "${OVERRIDE}" \
             --built-revision "${RESOLVED_REF}" \
-            --release-file clearsignage/release.yaml
+            --release-file "${ADDON_DIR}/release.yaml"
 
       - name: Choose app version
         id: version
@@ -116,9 +126,7 @@ jobs:
         run: |
           set -euo pipefail
           version="$(./scripts/next-image-version.py \
-            --owner madeByJansen \
-            --package clearsignage-ha \
-            --config clearsignage/config.yaml)"
+            --channel "${CHANNEL}")"
           printf 'version=%s\n' "${version}" >> "${GITHUB_OUTPUT}"
           echo "Building ClearSignage ${{ steps.source.outputs.revision }} as app version ${version}"
 
@@ -141,9 +149,10 @@ jobs:
           build_from() {
               python - "$1" <<'PY'
           import sys
+          import os
           import yaml
 
-          with open("clearsignage/build.yaml", encoding="utf-8") as file:
+          with open(os.environ["ADDON_DIR"] + "/build.yaml", encoding="utf-8") as file:
               print(yaml.safe_load(file)["build_from"][sys.argv[1]])
           PY
           }
@@ -157,7 +166,7 @@ jobs:
           build_one() {
               local platform="$1" build_base="$2" arch_tag="$3"
               docker buildx build \
-                --builder clearsignage \
+                --builder clearvenue \
                 --platform "${platform}" \
                 --build-arg "BUILD_FROM=${build_base}" \
                 --build-arg "CLEARSIGNAGE_REF=${RESOLVED_REF}" \
@@ -165,7 +174,7 @@ jobs:
                 --label "org.opencontainers.image.version=${APP_VERSION}" \
                 --tag "${IMAGE}:${APP_VERSION}-${arch_tag}" \
                 "${output_mode[@]}" \
-                clearsignage
+                "${ADDON_DIR}"
           }
 
           build_one linux/arm64 "$(build_from aarch64)" aarch64
@@ -187,6 +196,7 @@ jobs:
       - name: Record the published version
         if: inputs.push
         env:
+          RECORD_BRANCH: main
           RECORD_VERSION: ${{ steps.version.outputs.version }}
           GIT_USERNAME: x-access-token
           GIT_PASSWORD: ${{ github.token }}
@@ -216,10 +226,8 @@ jobs:
           APP_VERSION: ${{ steps.version.outputs.version }}
         run: |
           ./scripts/prune-ghcr-releases.py \
-            madeByJansen \
-            clearsignage-ha \
-            "${APP_VERSION}"
+            --channel "${CHANNEL}" --current "${APP_VERSION}" --apply
 
       - name: Remove private source
         if: always()
-        run: rm -rf clearsignage/src
+        run: rm -rf clearvenue/src clearvenue_beta/src clearvenue_dev/src

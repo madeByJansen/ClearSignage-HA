@@ -1,0 +1,69 @@
+#!/usr/bin/with-contenv bashio
+# shellcheck shell=bash
+# Start ClearVenue, hosted by Home Assistant (Epic 119 Pass 4; DP92).
+#
+# Everything here is translation: read what the operator set in the app's options, work
+# out the one thing they are allowed to leave blank, and exec. The decisions live in the
+# `clearvenue` and `hosted` packages, which are testable; this file is the seam that
+# cannot be, so it stays small enough to read in one go.
+#
+# **Why `-m clearvenue` and not `-m hosted`.** ClearVenue is a *role* — a machine that
+# runs several screens and is also the venue's source of truth for authoritative data
+# (a till today, a calendar or a transport board later) — and how that role is hosted is
+# a swappable value inside the package (`clearvenue/hosts/`). `hosted` alone is the
+# supervisor half: it runs the screens and has no till, no enrolment and no replication
+# lane, which is what this add-on shipped before and why an operator here found the
+# Screens page and nothing else. Every Home Assistant install is a venue.
+#
+# `clearvenue.paths` resolves its root to `/data` on this platform. Home Assistant
+# mounts independent persistent storage for each channel slug.
+set -euo pipefail
+
+export CLEARVENUE_HOST
+export CLEARVENUE_BUILD
+export CLEARSIGNAGE_HOST_IP
+export CLEARSIGNAGE_APP_DIR
+
+# Which platform is hosting the venue (DP92). Decides that Home Assistant has already
+# authenticated the operator, so no second sign-in is mounted (DP87), and that the app is
+# served on two listeners rather than binding a privileged port itself.
+CLEARVENUE_HOST=home-assistant
+
+# Which build this is, for the venue's About page — the number an operator quotes when
+# they report something. The app knows its own version and the venue does not, so this is
+# the only place the two meet. Never fatal: a blank build simply leaves the row off that
+# page, which is better than an app that will not start because it could not name itself.
+CLEARVENUE_BUILD="$(bashio::addon.version 2>/dev/null || true)"
+if [ "${CLEARVENUE_BUILD}" = "null" ]; then
+    CLEARVENUE_BUILD=""
+fi
+
+# The directory holding the `app` package, matching the appliance's SIGNAGE_APP_DIR.
+# The Dockerfile sets this; the fallback only matters if someone runs the image with it
+# unset, and it agreeing with the Dockerfile is the point.
+CLEARSIGNAGE_APP_DIR="${CLEARSIGNAGE_APP_DIR:-/opt/clearsignage/device}"
+
+# The address peers reach this host at (DP65). Passed through when the operator stated one
+# and left empty otherwise — **the guessing moved into Python** (Epic 149).
+#
+# This used to ask `ip route get 1.1.1.1` and take the answer, which on a box running
+# Tailscale is the VPN's `100.x` address: every screen on the venue's wifi is then told to
+# reach this box somewhere it cannot, and nothing looks wrong — ingress answers, the pages
+# load, and only sync silently never happens. `clearvenue/own_address.py` asks the same
+# question better, and being Python rather than a shell seam it has tests.
+CLEARSIGNAGE_HOST_IP="$(bashio::config 'host_ip')"
+
+# bashio::config hands back the *string* "null" for an option the operator cleared, so
+# an unset host_ip would otherwise be advertised to every peer verbatim.
+if [ "${CLEARSIGNAGE_HOST_IP}" = "null" ]; then
+    CLEARSIGNAGE_HOST_IP=""
+fi
+
+if bashio::var.is_empty "${CLEARSIGNAGE_HOST_IP}"; then
+    bashio::log.info "host_ip not set; this venue will work out its own address and say which."
+    bashio::log.info "Set host_ip in the app options if screens should reach this host elsewhere."
+fi
+
+bashio::log.info "Starting ClearVenue."
+
+exec /opt/venv/bin/python -m clearvenue
