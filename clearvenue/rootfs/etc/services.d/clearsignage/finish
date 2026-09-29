@@ -1,0 +1,39 @@
+#!/usr/bin/with-contenv bashio
+# shellcheck shell=bash
+# Bring the whole app down when the supervisor exits (Epic 119 Pass 4).
+#
+# Without this, s6 restarts only this service and the app looks healthy while every
+# screen is gone. Home Assistant's own restart policy is the right thing to own a crash,
+# and it can only do that if the container actually exits.
+#
+# bash rather than execline, and that is a correction rather than a preference. The
+# execline version called `s6-test`, which does not exist in s6-overlay v3 — the binary
+# moved into execline and was renamed `eltest` — so every invocation died with
+# "unable to spawn s6-test" and the container never came down. It also pointed
+# `s6-svscanctl` at `/var/run/s6/services`, which is the v2 scandir; v3 puts it at
+# `/run/service`. Two paths that only exist in an older s6 is a good sign this file
+# should stop hand-rolling s6 internals and use the documented exit path instead.
+
+readonly exit_code_container=$(</run/s6-linux-init-container-results/exitcode)
+readonly exit_code_service="${1}"
+readonly exit_code_signal="${2}"
+
+bashio::log.info \
+    "ClearSignage supervisor exited (code ${exit_code_service}, signal ${exit_code_signal})."
+
+# $1 is 256 when the service was killed by a signal, and $2 is then the signal number.
+# A stop from Home Assistant arrives that way and is not a failure, so the container
+# still exits 0 — only a genuine crash propagates a non-zero code outward.
+if [[ "${exit_code_service}" -eq 256 ]]; then
+    if [[ "${exit_code_container}" -eq 0 ]] && [[ "${exit_code_signal}" -ne 15 ]]; then
+        echo $((128 + exit_code_signal)) > /run/s6-linux-init-container-results/exitcode
+    fi
+elif [[ "${exit_code_service}" -ne 0 ]]; then
+    if [[ "${exit_code_container}" -eq 0 ]]; then
+        echo "${exit_code_service}" > /run/s6-linux-init-container-results/exitcode
+    fi
+fi
+
+# Unconditional: the supervisor is the app. Whatever made it stop, leaving s6 to restart
+# it in place is what hides a dead screen behind a healthy-looking app.
+exec /run/s6/basedir/bin/halt
