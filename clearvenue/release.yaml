@@ -1,0 +1,26 @@
+---
+# The one ClearSignage commit that may be published from somewhere other than `prod`.
+#
+# **A normal release does not touch this file.** Building `prod` publishes whatever prod
+# is at the time, because that is what the branch means: a commit only gets onto prod
+# through ClearSignage's own release gate, so it has already been signed off by the time
+# this pipeline can see it. A release here is one edit — bump `version` in `config.yaml`
+# — and a run of the pipeline with PUSH on.
+#
+# This file is read only when publishing something else: a `beta` or `main` build, or an
+# exact commit given as `CLEARSIGNAGE_REF_OVERRIDE`. Those are the cases where nothing has
+# vouched for the code, so `scripts/check-publish-allowed.py` refuses unless the commit
+# below is the one being built — which makes shipping off-prod code a deliberate, written
+# act rather than a choice in a dropdown. Both fields name the same release; a test fails
+# if only one of them is edited.
+#
+# The app version is deliberately NOT repeated here. It lives once, in `config.yaml`,
+# because the Supervisor parses that manifest and tracks an installed app by it — so it
+# has to be a literal there and everything else reads it from there.
+#
+# Currently prod's head, and the first commit to carry the venue role (DP92): it has
+# `clearvenue/` with a `hosts/` registry answering to `home-assistant`, which is the value
+# `rootfs/etc/services.d/clearsignage/run` exports and the reason that script can exec
+# `-m clearvenue` at all. The revision it replaces predates `clearvenue/` entirely.
+clearsignage_ref: "cb7277dde56fe17e98406fc464c477c601922f4a"
+clearsignage_revision: "cb7277dde56fe17e98406fc464c477c601922f4a"
