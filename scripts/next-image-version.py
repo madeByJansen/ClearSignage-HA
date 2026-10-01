@@ -105,7 +105,9 @@ def stamp_version(manifest: str, version: str) -> str:
 def published_tags(owner: str, package: str, token: str) -> list[str]:
     """Return every tag on the package, so the day's counters can be read off them."""
     tags: list[str] = []
-    for version in ghcr_api.all_versions(owner, package, token, allow_missing=True):
+    for version in ghcr_api.all_versions(
+        owner, package, token, owner_kind="organization", allow_missing=True
+    ):
         tags.extend(ghcr_api.tags_of(version))
     return tags
 

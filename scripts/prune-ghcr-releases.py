@@ -77,8 +77,9 @@ def main() -> int:
         print("GHCR_TOKEN is required", file=sys.stderr)
         return 2
 
-    base = ghcr_api.versions_url(owner, package)
-    versions = ghcr_api.all_versions(owner, package, token)
+    owner_kind = "organization"
+    base = ghcr_api.versions_url(owner, package, owner_kind)
+    versions = ghcr_api.all_versions(owner, package, token, owner_kind=owner_kind)
 
     doomed = versions_to_delete(versions, current)
     for version_id in doomed:

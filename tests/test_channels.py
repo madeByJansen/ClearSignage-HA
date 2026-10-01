@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import urllib.error
+import urllib.request
 
 import pytest
 import yaml
@@ -15,6 +16,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from channels import CHANNELS, channel_settings
 import ghcr_api
+
+
+class APIResponse(io.StringIO):
+    def __init__(self, value, headers=None):
+        super().__init__(json.dumps(value))
+        self.headers = headers or {}
 
 
 def load(name):
@@ -139,18 +146,70 @@ def test_new_package_bootstrap_requires_successful_owner_listing(monkeypatch):
     def missing(url, token, method='GET'):
         if '/versions' in url:
             raise urllib.error.HTTPError(url, 404, 'missing', {}, None)
-        return io.StringIO(json.dumps([{'name': 'clearvenue'}]))
+        return APIResponse([{'name': 'clearvenue'}])
     monkeypatch.setattr(ghcr_api, 'request', missing)
-    assert ghcr_api.all_versions('owner', 'clearvenue-dev', 'test', allow_missing=True) == []
+    assert ghcr_api.all_versions('owner', 'clearvenue-dev', 'test', owner_kind='organization', allow_missing=True) == []
     with pytest.raises(urllib.error.HTTPError):
-        ghcr_api.all_versions('owner', 'clearvenue', 'test', allow_missing=True)
+        ghcr_api.all_versions('owner', 'clearvenue', 'test', owner_kind='organization', allow_missing=True)
     with pytest.raises(urllib.error.HTTPError):
-        ghcr_api.all_versions('owner', 'clearvenue-dev', 'test')
+        ghcr_api.all_versions('owner', 'clearvenue-dev', 'test', owner_kind='organization')
     def denied(url, token, method='GET'):
         raise urllib.error.HTTPError(url, 403, 'forbidden', {}, None)
     monkeypatch.setattr(ghcr_api, 'request', denied)
     with pytest.raises(urllib.error.HTTPError):
-        ghcr_api.all_versions('owner', 'clearvenue-dev', 'test', allow_missing=True)
+        ghcr_api.all_versions('owner', 'clearvenue-dev', 'test', owner_kind='organization', allow_missing=True)
+
+
+def test_ghcr_pagination_follows_link_and_stops_without_one(monkeypatch):
+    next_url = 'https://api.github.com/orgs/owner/packages/container/app/versions?per_page=100&page=2'
+    responses = [
+        APIResponse([{'id': 1}], {'Link': f'<{next_url}>; rel="next", <ignored>; rel="last"'}),
+        APIResponse([{'id': number} for number in range(2, 102)]),
+    ]
+    calls = []
+
+    def request(url, token, method='GET'):
+        calls.append(url)
+        return responses.pop(0)
+
+    monkeypatch.setattr(ghcr_api, 'request', request)
+    versions = ghcr_api.all_versions('owner', 'app', 'token', owner_kind='organization')
+    assert len(versions) == 101
+    assert calls == [
+        'https://api.github.com/orgs/owner/packages/container/app/versions?per_page=100',
+        next_url,
+    ]
+    assert not responses
+
+
+@pytest.mark.parametrize('kind,route', [('organization', 'orgs'), ('user', 'users')])
+def test_package_urls_make_owner_kind_explicit(monkeypatch, kind, route):
+    calls = []
+    monkeypatch.setattr(ghcr_api, 'request',
+                        lambda url, token, method='GET': calls.append(url) or APIResponse([]))
+    assert ghcr_api.versions_url('an owner', 'an/app', kind) == (
+        f'https://api.github.com/{route}/an%20owner/packages/container/an%2Fapp/versions')
+    assert ghcr_api.package_names('an owner', 'token', owner_kind=kind) == set()
+    assert calls == [f'https://api.github.com/{route}/an%20owner/packages?package_type=container&per_page=100']
+
+
+def test_http_error_reports_github_message_without_token(monkeypatch):
+    token = 'super-secret-token'
+    url = f'https://api.github.com/example?access_token={token}&page=1'
+    body = io.BytesIO(json.dumps({'message': 'Bad owner route', 'documentation_url': 'https://docs.github.com'}).encode())
+
+    def fail(request):
+        assert request.headers['Authorization'] == f'Bearer {token}'
+        raise urllib.error.HTTPError(request.full_url, 400, 'Bad Request', {}, body)
+
+    monkeypatch.setattr(urllib.request, 'urlopen', fail)
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        ghcr_api.request(url, token, method='DELETE')
+    diagnostic = str(caught.value)
+    assert 'DELETE https://api.github.com/example?access_token=REDACTED&page=1' in diagnostic
+    assert 'status 400' in diagnostic
+    assert 'Bad owner route' in diagnostic
+    assert token not in diagnostic
 
 
 def test_channel_chooser_reads_only_selected_package(monkeypatch, tmp_path):
@@ -173,7 +232,8 @@ def test_pruning_targets_only_selected_channel(monkeypatch, apply):
     calls = []
     versions = [{'id': i, 'metadata': {'container': {'tags': [tag]}}}
                 for i, tag in enumerate(['20260927.01', '20260928.01', '20260929.01', '20260930.01'])]
-    def listing(owner, package, token):
+    def listing(owner, package, token, *, owner_kind):
+        assert owner_kind == 'organization'
         assert package == 'clearvenue-beta'
         return versions
     monkeypatch.setattr(ghcr_api, 'all_versions', listing)
@@ -283,9 +343,9 @@ def test_legacy_cleanup_deletes_only_old_artifacts(monkeypatch, apply):
     monkeypatch.setattr(cleanup, 'collection', lambda url, token: (
         [{'id': 5, 'tag_name': 'v20260928.01'}, {'id': 6, 'tag_name': 'stable/v20260929.01'}]
         if url.endswith('/releases') else [{'name': 'v20260928.01'}, {'name': 'dev/v20260929.01'}]))
-    monkeypatch.setattr(ghcr_api, 'all_versions', lambda *args: [
+    monkeypatch.setattr(ghcr_api, 'all_versions', lambda *args, **kwargs: [
         {'metadata': {'container': {'tags': ['20260929.01', '20260929.01-amd64', '20260929.01-aarch64']}}}])
-    monkeypatch.setattr(ghcr_api, 'package_names', lambda *args: {'clearsignage-ha', 'clearvenue', 'clearvenue-beta', 'clearvenue-dev'})
+    monkeypatch.setattr(ghcr_api, 'package_names', lambda *args, **kwargs: {'clearsignage-ha', 'clearvenue', 'clearvenue-beta', 'clearvenue-dev'})
     monkeypatch.setattr(ghcr_api, 'request', lambda url, token, method: deleted.append((url, method)) or io.StringIO(''))
     monkeypatch.setenv('GHCR_TOKEN', 'fixture')
     monkeypatch.setattr(sys, 'argv', ['cleanup'] + (['--apply'] if apply else []))
