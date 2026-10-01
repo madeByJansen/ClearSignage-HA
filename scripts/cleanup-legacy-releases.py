@@ -19,6 +19,8 @@ from channels import CHANNELS, channel_settings
 
 LEGACY_PACKAGE = "clearsignage-ha"
 LEGACY_TAG = re.compile(r"^v\d+(?:\.\d+)+$")
+OWNER = "madeByJansen"
+OWNER_KIND = "organization"
 
 
 def read_json(url, token):
@@ -74,7 +76,7 @@ def main():
         content = read_json(api + f"/contents/{settings['addon_dir']}/config.yaml?ref={main_sha}", token)
         manifests[channel] = yaml.safe_load(base64.b64decode(content["content"]))
         tags[settings["package"]] = {
-            tag for version in ghcr_api.all_versions("madeByJansen", settings["package"], token)
+            tag for version in ghcr_api.all_versions(OWNER, settings["package"], token, owner_kind=OWNER_KIND)
             for tag in ghcr_api.tags_of(version)
         }
     replacement_ready(tree, manifests, tags)
@@ -86,9 +88,9 @@ def main():
     for tag in collection(api + "/tags", token):
         if LEGACY_TAG.fullmatch(tag["name"]):
             actions.append((f"Git tag {tag['name']}", api + "/git/refs/tags/" + urllib.parse.quote(tag["name"], safe="")))
-    if LEGACY_PACKAGE in ghcr_api.package_names("madeByJansen", token):
+    if LEGACY_PACKAGE in ghcr_api.package_names(OWNER, token, owner_kind=OWNER_KIND):
         actions.append((f"Entire GHCR package {LEGACY_PACKAGE} (including untagged layers)",
-                        "https://api.github.com/orgs/madeByJansen/packages/container/" + LEGACY_PACKAGE))
+                        ghcr_api.package_url(OWNER, LEGACY_PACKAGE, OWNER_KIND)))
     for label, url in actions:
         print(f"{'Deleting' if args.apply else 'Would delete'}: {label}", flush=True)
         if args.apply:
