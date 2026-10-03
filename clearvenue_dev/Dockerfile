@@ -61,8 +61,13 @@ RUN python3 -m venv /opt/venv \
     && /opt/venv/bin/pip install -e /opt/clearsignage/shared \
         -c /opt/clearsignage/device/constraints.txt
 
+# Where the signed screen release scripts/build-screen-release.sh placed under src/ lands,
+# and where the venue serves it from to the screens that joined it (ClearSignage DP210).
+# Stated rather than left to the venue's default, so a change to where the source is copied
+# is a change to this line and not a venue that quietly offers its screens nothing.
 ENV PATH="/opt/venv/bin:${PATH}" \
-    PYTHONPATH="/opt/clearsignage:/opt/clearsignage/device:/opt/clearsignage/shared"
+    PYTHONPATH="/opt/clearsignage:/opt/clearsignage/device:/opt/clearsignage/shared" \
+    CLEARVENUE_SCREEN_RELEASE_DIR=/opt/clearsignage/screen-release
 
 COPY rootfs/ /
 RUN chmod a+x /etc/services.d/clearvenue/run /etc/services.d/clearvenue/finish

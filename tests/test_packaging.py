@@ -714,3 +714,127 @@ def test_the_image_carries_the_service_the_venue_deploys_to_its_hosting():
     assert "event_share" in copied.group(1).split(), "the venue could not build its release"
     for required in ("event_share/app/VERSION", "event_share/install/install.php"):
         assert f'"${{DEST}}/{required}"' in fetch, f"{required} is copied but never verified"
+
+
+# ── The screen release a venue hands to the screens that joined it (ClearSignage DP210) ──
+
+SCREEN_RELEASE = (REPO / "scripts" / "build-screen-release.sh").read_text(encoding="utf-8")
+
+
+def test_the_screen_release_is_built_between_choosing_the_version_and_building_the_image():
+    """Versioned as the add-on is, from the commit the image runs, inside the image.
+
+    After the version is chosen, because the release carries it: a screen takes a release
+    only if it is newer, so every new add-on has to be a newer release to a screen. Before
+    the image is built, because the image's COPY is what carries it.
+    """
+    stage = PIPELINE.index("stage('Build the screen release')")
+    assert PIPELINE.index("next-image-version.py") < stage
+    assert stage < PIPELINE.index("stage('Build and publish')")
+    building = PIPELINE[stage : PIPELINE.index("stage('Build and publish')")]
+    assert 'SCREEN_RELEASE_VERSION="${APP_VERSION}"' in building
+    assert 'CLEARSIGNAGE_REF="${RESOLVED_REF}"' in building
+    assert "./scripts/build-screen-release.sh" in building
+
+
+def test_the_screen_release_is_signed_with_the_release_jobs_own_key():
+    """One key, so a screen trusts a venue's release exactly as it trusts any other."""
+    stage = PIPELINE.index("stage('Build the screen release')")
+    building = PIPELINE[stage : PIPELINE.index("stage('Build and publish')")]
+    assert "string(credentialsId: 'update-signing-private-key'" in building
+    # Only a missing credential is caught, and a published image may not go without it.
+    assert "CredentialNotFoundException" in building
+    assert "if (params.PUSH)" in building
+    assert '"SCREEN_RELEASE_REQUIRED=${params.PUSH}"' in building
+
+
+def test_the_screen_release_lands_where_the_venue_is_told_to_look():
+    """Three files must agree, and nothing else connects them.
+
+    The script writes under ``src/``, the Dockerfile's COPY carries ``src/`` to
+    ``/opt/clearsignage/``, and the ENV tells the venue where that put it. A release placed
+    one folder off builds, publishes and is offered to nobody.
+    """
+    assert 'SRC="${HERE}/${ADDON_DIR}/src"' in SCREEN_RELEASE
+    assert 'DEST="${SRC}/screen-release"' in SCREEN_RELEASE
+    directives = _dockerfile_directives()
+    assert "COPY src/ /opt/clearsignage/" in directives
+    assert "CLEARVENUE_SCREEN_RELEASE_DIR=/opt/clearsignage/screen-release" in directives
+
+
+def test_the_screen_release_is_built_by_clearsignage_s_own_packaging():
+    """Built and signed by the scripts in the commit being shipped, never a copy here.
+
+    And checked against the keyring that commit bakes into screens before it is placed:
+    the last point where a release that would not verify is still this build's problem.
+    """
+    assert '"${UPSTREAM}/packaging/build-release.sh"' in SCREEN_RELEASE
+    assert '"${UPSTREAM}/packaging/sign_update_manifest.py"' in SCREEN_RELEASE
+    assert "device/app/update_signing_public.json" in SCREEN_RELEASE
+    assert "verify_manifest_signature" in SCREEN_RELEASE
+    assert not list(REPO.rglob("sign_update_manifest.py")), "a signer was copied into this repo"
+
+
+def _run_screen_release(tmp_path, **env):
+    """Run the script from a copy of this repo's scripts, so nothing here is touched."""
+    import os
+    import shutil
+    import subprocess
+
+    (tmp_path / "scripts").mkdir()
+    for name in ("build-screen-release.sh", "channel-env.sh", "channels.py"):
+        shutil.copy2(REPO / "scripts" / name, tmp_path / "scripts" / name)
+    clean = {key: value for key, value in os.environ.items() if key not in {
+        "UPDATE_SIGNING_PRIVATE_KEY", "SCREEN_RELEASE_REQUIRED", "SCREEN_RELEASE_VERSION",
+    }}
+    return subprocess.run(
+        ["bash", str(tmp_path / "scripts" / "build-screen-release.sh")],
+        env={**clean, "CHANNEL": "stable", **env},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_a_dry_run_without_the_key_says_it_carries_no_screen_release(tmp_path):
+    ran = _run_screen_release(tmp_path, SCREEN_RELEASE_VERSION="20261003.01")
+
+    assert ran.returncode == 0, ran.stderr
+    assert "carries NO screen release" in ran.stdout
+    assert not (tmp_path / "clearvenue" / "src" / "screen-release").exists()
+
+
+def test_a_published_image_without_the_key_stops_the_build(tmp_path):
+    ran = _run_screen_release(
+        tmp_path, SCREEN_RELEASE_VERSION="20261003.01", SCREEN_RELEASE_REQUIRED="true"
+    )
+
+    assert ran.returncode == 1
+    assert "must carry a signed screen release" in ran.stderr
+
+
+@pytest.mark.parametrize("version", ["", "1.4.0", "20261003.1", "20261003.01-rc1"])
+def test_a_version_a_screen_could_not_order_stops_the_build(tmp_path, version):
+    """A screen orders releases by parsing YYYYMMDD.NN and refuses what it cannot parse."""
+    ran = _run_screen_release(tmp_path, SCREEN_RELEASE_VERSION=version)
+
+    assert ran.returncode == 2
+    assert "YYYYMMDD.NN" in ran.stderr
+
+
+def test_both_publishers_build_the_screen_release():
+    """Actions is the alternative publisher; an image it published must carry the same."""
+    workflow = yaml.safe_load(
+        (REPO / ".github" / "workflows" / "homeassistant.yml").read_text(encoding="utf-8")
+    )
+    steps = workflow["jobs"]["build"]["steps"]
+    names = [step["name"] for step in steps]
+    building = steps[names.index("Build the screen release")]
+
+    assert names.index("Choose app version") < names.index("Build the screen release")
+    assert names.index("Build the screen release") < names.index("Build both architectures")
+    assert "./scripts/build-screen-release.sh" in building["run"]
+    assert building["env"]["SCREEN_RELEASE_VERSION"] == "${{ steps.version.outputs.version }}"
+    assert building["env"]["CLEARSIGNAGE_REF"] == "${{ steps.source.outputs.revision }}"
+    assert building["env"]["SCREEN_RELEASE_REQUIRED"] == "${{ inputs.push }}"
+    assert building["env"]["UPDATE_SIGNING_PRIVATE_KEY"] == "${{ secrets.UPDATE_SIGNING_PRIVATE_KEY }}"
