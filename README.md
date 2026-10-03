@@ -1,8 +1,8 @@
 # ClearVenue — Home Assistant apps
 
-Home Assistant packaging for ClearVenue. Product code remains in the private
-`madeByJansen/ClearSignage` repository. This repository has **one permanent branch,
-`main`**, with three independent apps. Feature branches are used for review only.
+Home Assistant packaging for ClearVenue. Product code remains in the separate repository.
+This repository has **one permanent branch, `main`**, with three independent apps.
+Feature branches are used for review only.
 
 | Channel | App | Slug / folder | Upstream branch | GHCR image |
 | --- | --- | --- | --- | --- |
