@@ -123,6 +123,56 @@ EOF
                 }
             }
         }
+        // The signed screen release this venue hands to the screens that joined it
+        // (ClearSignage DP210): built from RESOLVED_REF, versioned APP_VERSION, signed with
+        // the release job's own key, and placed in src/ where the image's COPY picks it up.
+        // A published image must carry one — a venue that silently carried none would leave
+        // every joined screen where it is — so only a dry run may go without the key.
+        stage('Build the screen release') {
+            steps {
+                script {
+                    try {
+                        withCredentials([
+                            usernamePassword(
+                                credentialsId: 'GithubPAT-Workplain-com',
+                                usernameVariable: 'GITHUB_USERNAME', passwordVariable: 'GITHUB_TOKEN'
+                            ),
+                            string(credentialsId: 'update-signing-private-key', variable: 'UPDATE_SIGNING_PRIVATE_KEY')
+                        ]) {
+                            withEnv(["SCREEN_RELEASE_REQUIRED=${params.PUSH}"]) {
+                                sh '''#!/usr/bin/env bash
+                                    set -euo pipefail
+                                    ASKPASS_SCRIPT="$(mktemp)"
+                                    trap 'rm -f "${ASKPASS_SCRIPT}"' EXIT
+                                    cat > "${ASKPASS_SCRIPT}" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+    *Username*) printf '%s\\n' "${GITHUB_USERNAME}" ;;
+    *Password*) printf '%s\\n' "${GITHUB_TOKEN}" ;;
+    *) exit 1 ;;
+esac
+EOF
+                                    chmod 700 "${ASKPASS_SCRIPT}"
+                                    export GIT_ASKPASS="${ASKPASS_SCRIPT}" GIT_TERMINAL_PROMPT=0
+                                    .venv/bin/python -m pip install --quiet cryptography pydantic
+                                    SCREEN_RELEASE_VERSION="${APP_VERSION}" \
+                                        CLEARSIGNAGE_REF="${RESOLVED_REF}" \
+                                        PYTHON="${WORKSPACE}/.venv/bin/python" \
+                                        ./scripts/build-screen-release.sh
+                                '''
+                            }
+                        }
+                    } catch (org.jenkinsci.plugins.credentialsbinding.impl.CredentialNotFoundException missing) {
+                        // Only a missing credential is caught; a broken key, a failed fetch or
+                        // a release that does not verify fail the build as themselves.
+                        if (params.PUSH) {
+                            error "No release signing key (${missing.message}): a published ClearVenue must carry a signed screen release."
+                        }
+                        echo 'WARNING: no release signing key; this dry-run image carries NO screen release.'
+                    }
+                }
+            }
+        }
         stage('Build and publish') {
             steps {
                 sh '''#!/usr/bin/env bash

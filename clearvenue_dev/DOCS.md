@@ -99,6 +99,11 @@ capability genuinely is not here, not because it was left out:
   machine it runs on. Restart the app from Home Assistant instead.
 - **No software updates from inside a screen.** Home Assistant updates this app; an
   in-place update would be thrown away the next time it restarts.
+- **Screens on your walls update from here.** A Raspberry Pi or other screen that joined
+  this venue takes its software from this app: update the app in Home Assistant, and the
+  screens joined to it follow by themselves within about fifteen minutes. They check the
+  update is genuine before installing it, exactly as they would one from the internet. The
+  venue's **About** page shows the screen software it carries.
 - **No "sold out" / booking taps from the screen itself.** On an appliance those are
   authorised by *standing at the panel*, which a hosted screen has no way to check. Here
   they are authorised by your Home Assistant login instead — so use the sidebar when you

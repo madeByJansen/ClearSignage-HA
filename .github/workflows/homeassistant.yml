@@ -130,6 +130,37 @@ jobs:
           printf 'version=%s\n' "${version}" >> "${GITHUB_OUTPUT}"
           echo "Building ClearSignage ${{ steps.source.outputs.revision }} as app version ${version}"
 
+      # The signed screen release this venue hands to the screens that joined it
+      # (ClearSignage DP210), the same step jenkinsfile-ha runs. A published image must carry
+      # one, so publishing without the UPDATE_SIGNING_PRIVATE_KEY secret stops here.
+      - name: Build the screen release
+        env:
+          SCREEN_RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          CLEARSIGNAGE_REF: ${{ steps.source.outputs.revision }}
+          SCREEN_RELEASE_REQUIRED: ${{ inputs.push }}
+          UPDATE_SIGNING_PRIVATE_KEY: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY }}
+          GITHUB_USERNAME: x-access-token
+          GITHUB_TOKEN: ${{ secrets.CLEARSIGNAGE_PAT }}
+        run: |
+          set -euo pipefail
+
+          ASKPASS_SCRIPT="$(mktemp)"
+          trap 'rm -f "${ASKPASS_SCRIPT}"' EXIT
+          cat > "${ASKPASS_SCRIPT}" <<'EOF'
+          #!/usr/bin/env bash
+          case "$1" in
+              *Username*) printf '%s\n' "${GITHUB_USERNAME}" ;;
+              *Password*) printf '%s\n' "${GITHUB_TOKEN}" ;;
+              *) exit 1 ;;
+          esac
+          EOF
+          chmod 700 "${ASKPASS_SCRIPT}"
+          export GIT_ASKPASS="${ASKPASS_SCRIPT}"
+          export GIT_TERMINAL_PROMPT=0
+
+          python -m pip install --quiet cryptography pydantic
+          ./scripts/build-screen-release.sh
+
       - name: Log in to GHCR
         if: inputs.push
         uses: docker/login-action@v3

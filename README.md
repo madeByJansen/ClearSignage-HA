@@ -79,6 +79,35 @@ into the selected app's ignored `src/`, strips tests, verifies required runtime 
 records the resolved SHA. Both pipelines remove private source from the workspace after
 the build. Local builders should remove their selected `src/` when finished.
 
+### The screen release the image carries
+
+Screens that joined a ClearVenue take their software from it (ClearSignage DP210), so
+updating this app is how a venue's wall screens are updated, with no download host.
+`scripts/build-screen-release.sh` makes that possible: after the version is chosen it
+fetches the exact upstream commit the image is built from, runs ClearSignage's own
+`packaging/build-release.sh` and `packaging/sign_update_manifest.py` with this app's
+version and channel, checks the signature against the keyring that commit gives screens,
+and places `manifest-<channel>.json` and `clearsignage-<version>.tar.gz` in
+`src/screen-release/`. The Dockerfile's `COPY src/` carries them to
+`/opt/clearsignage/screen-release`, which `CLEARVENUE_SCREEN_RELEASE_DIR` names.
+
+- Jenkins signs with the global `update-signing-private-key` credential, the release job's
+  own key. Actions needs it as the `UPDATE_SIGNING_PRIVATE_KEY` repository secret.
+- A publish (`PUSH=true`) without the key **fails**: an image that silently carried no
+  release would leave every joined screen where it is. A dry run without it warns and builds
+  an image that offers its screens nothing.
+- A screen only takes the release for its own channel: the stable app carries
+  `manifest-stable.json`, beta `manifest-beta.json`, dev `manifest-dev.json`.
+
+A local build carries one only if asked:
+
+```bash
+CHANNEL=dev ./scripts/fetch-source.sh
+CHANNEL=dev SCREEN_RELEASE_VERSION=20261003.01 \
+  UPDATE_SIGNING_PRIVATE_KEY="$(cat update_signing_private.pem)" \
+  ./scripts/build-screen-release.sh
+```
+
 ## Maintaining packaging
 
 `clearvenue/` is the canonical shared Dockerfile, docs, build bases, translations and s6
